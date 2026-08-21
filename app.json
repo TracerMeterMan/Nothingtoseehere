@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Routine Ally",
+    "slug": "routineally",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "icon": "./assets/icon.png",
+    "web": {
+      "favicon": "./assets/Untitled design (2).png"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#05070A"
+      }
+    },
+    "plugins": [
+      "expo-font"
+    ]
+  }
+}
