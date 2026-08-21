@@ -9,6 +9,7 @@ import { exerciseLibrary } from "../data/exerciseLibrary";
 import { muscleGroups } from "../data/muscleGroups";
 import { theme } from "../theme/theme";
 import { Button } from "../components/ui/Button";
+import { computeRoutineOverload, describeOverload } from "../utils/overload";
 
 const WORKOUT_HISTORY_KEY = "@workout_history";
 const FAVORITE_EXERCISES_KEY = "@favorite_exercises";
@@ -96,6 +97,7 @@ export function MetricsScreen() {
   const [graphMode, setGraphMode] = useState<"maxWeight" | "weightAtRep" | "repsAtWeight" | "maxHold" | "weightAtHold" | "holdAtWeight">("maxWeight");
   const [targetRepInput, setTargetRepInput] = useState<string>("");
   const [targetWeightInput, setTargetWeightInput] = useState<string>("");
+  const [selectedOverloadRoutine, setSelectedOverloadRoutine] = useState<string | null>(null);
 
   useEffect(() => {
     const loadScreenData = async () => {
@@ -498,6 +500,31 @@ export function MetricsScreen() {
       calculatedPoints.slice(1).map(p => `L ${p.x} ${p.y}`).join(" ");
   }
 
+  // Routines that actually have logged sessions can be charted for overload.
+  const overloadRoutineNames = Array.from(
+    new Set(history.map((session) => session.routineName).filter(Boolean))
+  ) as string[];
+  const activeOverloadRoutine = selectedOverloadRoutine || overloadRoutineNames[0] || null;
+  const overloadPoints = activeOverloadRoutine
+    ? computeRoutineOverload(history, null, activeOverloadRoutine).slice(-8)
+    : [];
+  const overloadSummary = describeOverload(overloadPoints);
+
+  const overloadValues = overloadPoints.map((point) => point.index);
+  const overloadMin = overloadValues.length ? Math.min(...overloadValues, 100) - 5 : 95;
+  const overloadMax = overloadValues.length ? Math.max(...overloadValues, 100) + 5 : 105;
+  const overloadRange = overloadMax - overloadMin === 0 ? 1 : overloadMax - overloadMin;
+  const overloadSpacing = overloadPoints.length > 1 ? usableWidth / (overloadPoints.length - 1) : usableWidth;
+  const overloadPointCoords = overloadPoints.map((point, index) => ({
+    x: sidePadding + index * overloadSpacing,
+    y: graphHeight - ((point.index - overloadMin) / overloadRange) * graphHeight,
+    point,
+  }));
+  const overloadPath = overloadPointCoords.length
+    ? `M ${overloadPointCoords[0].x} ${overloadPointCoords[0].y} ` +
+      overloadPointCoords.slice(1).map((coord) => `L ${coord.x} ${coord.y}`).join(" ")
+    : "";
+
   return (
     <Screen padded={false}>
       <ScrollView contentContainerStyle={styles.container}>
@@ -725,6 +752,71 @@ export function MetricsScreen() {
                 </View>
               ))}
             </ScrollView>
+          )}
+        </View>
+
+        {/* ROUTINE PROGRESSIVE OVERLOAD */}
+        <View style={styles.sectionContainer}>
+          <Text style={styles.sectionTitle}>Routine Progressive Overload</Text>
+
+          <View style={styles.infoBanner}>
+            <Text style={styles.infoBannerText}>
+              Averages every exercise in the routine against its first logged session. Extra reps, heavier loads and
+              longer holds all count as overload — 100 is your starting point.
+            </Text>
+          </View>
+
+          {overloadRoutineNames.length === 0 ? (
+            <Text style={styles.emptyText}>No routine sessions logged yet.</Text>
+          ) : (
+            <View style={styles.chartCard}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.muscleFilterScroll}>
+                {overloadRoutineNames.map((name) => {
+                  const isActive = name === activeOverloadRoutine;
+                  return (
+                    <Pressable
+                      key={name}
+                      style={[styles.filterChip, isActive && styles.chipActive]}
+                      onPress={() => setSelectedOverloadRoutine(name)}
+                    >
+                      <Text style={[styles.filterChipText, isActive && styles.chipTextActive]}>{name}</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+
+              <Text style={styles.overloadHeadline}>
+                {overloadPoints.length ? `${overloadPoints[overloadPoints.length - 1].index} overload index` : "No data"}
+              </Text>
+              <Text style={styles.overloadSummary}>{overloadSummary}</Text>
+
+              {overloadPoints.length > 1 && (
+                <>
+                  <View style={{ height: graphHeight, width: graphWidth }}>
+                    <Svg width={graphWidth} height={graphHeight} style={StyleSheet.absoluteFill}>
+                      <Path
+                        d={overloadPath}
+                        fill="none"
+                        stroke={theme.colors.accent}
+                        strokeWidth={3}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      {overloadPointCoords.map((coord, index) => (
+                        <Circle key={index} cx={coord.x} cy={coord.y} r={4} fill={theme.colors.accent} />
+                      ))}
+                    </Svg>
+                  </View>
+                  <View style={styles.overloadAxisRow}>
+                    {overloadPoints.map((point, index) => (
+                      <Text key={`${point.date}-${index}`} style={styles.overloadAxisLabel}>
+                        {point.date}
+                      </Text>
+                    ))}
+                  </View>
+                </>
+              )}
+            </View>
           )}
         </View>
 
@@ -1191,6 +1283,10 @@ const styles = StyleSheet.create({
   filterContainer: { gap: 10, marginTop: 2, marginBottom: 4 },
   modalityFilterRow: { flexDirection: "row", flexWrap: "nowrap", justifyContent: "space-between", gap: 4 },
   muscleFilterScroll: { flexDirection: "row", alignItems: "center", gap: 6 },
+  overloadHeadline: { fontSize: 20, fontWeight: "700", color: theme.colors.textPrimary, marginTop: theme.spacing.sm },
+  overloadSummary: { fontSize: 12, color: theme.colors.textSecondary, marginBottom: theme.spacing.sm },
+  overloadAxisRow: { flexDirection: "row", justifyContent: "space-between", marginTop: theme.spacing.xs },
+  overloadAxisLabel: { fontSize: 10, color: theme.colors.textMuted },
   filterChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border },
   filterChipText: { fontSize: 12, color: theme.colors.textSecondary, textTransform: "capitalize" },
   chipActive: { backgroundColor: theme.colors.accent, borderColor: theme.colors.accent },

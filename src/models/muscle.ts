@@ -28,12 +28,15 @@ export type MuscleGroup = {
   name: string;
 };
 
-export type MuscleRecoveryStatus =
+export type RecoveryStatus =
   | "ready"
-  | "recovering"
-  | "notReady";
+  | "light"
+  | "moderate"
+  | "high";
 
 export type MuscleRecoveryPreview = {
   muscleId: MuscleGroupId;
-  status: MuscleRecoveryStatus;
+  status: RecoveryStatus;
+  fatigueScore: number;
+  hoursRemaining: number;
 };

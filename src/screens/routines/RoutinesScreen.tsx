@@ -8,6 +8,10 @@ import { theme } from "../../theme/theme";
 import { useRoutines } from "../../context/RoutineContext";
 import NumericInput from "../../components/ui/NumericInput";
 import { Routine, RoutineExercise } from "../../models/routine";
+import { MuscleGroupId } from "../../models/muscle";
+import { Equipment } from "../../models/exercise";
+import { EQUIPMENT_LABELS } from "../../utils/exerciseClassification";
+import { defaultRepsFor, generateRoutine } from "../../utils/routineGenerator";
 const buildConfigGroups = (
   selectedExerciseIds: string[],
   exerciseConfigs: Record<string, ExerciseConfig>
@@ -130,6 +134,10 @@ const MODALITY_FILTERS = ["barbells", "dumbbells", "calisthenics", "cables"];
 const TYPE_FILTERS = ["compound", "isolation", "skill-static", "skill-dynamic"];
 const MUSCLE_FILTERS = [ "chest", "rhomboids", "lats", "traps", "frontDelts", "sideDelts", "rearDelts", "biceps", "triceps", "forearms", "abs", "obliques", "lowerBack", "glutes", "quads", "hamstrings", "calves", "hipFlexors"];
 
+const EQUIPMENT_OPTIONS = Object.keys(EQUIPMENT_LABELS).filter(
+  (item) => item !== "none"
+) as Equipment[];
+
 interface ExerciseConfig {
   sets: string;
   reps: string;
@@ -167,6 +175,15 @@ export function RoutinesScreen() {
   // States for handling custom alert popup UI
   const [deleteAlertVisible, setDeleteAlertVisible] = useState(false);
   const [routineToDelete, setRoutineToDelete] = useState<Routine | null>(null);
+
+  // Smart (rule-based) routine builder states
+  const [isBuilderVisible, setIsBuilderVisible] = useState(false);
+  const [builderMuscles, setBuilderMuscles] = useState<MuscleGroupId[]>([]);
+  const [builderEquipment, setBuilderEquipment] = useState<Equipment[]>([]);
+  const [builderSets, setBuilderSets] = useState("4");
+  const [builderPerMuscle, setBuilderPerMuscle] = useState("2");
+  const [builderWeighted, setBuilderWeighted] = useState(true);
+  const [builderError, setBuilderError] = useState<string | null>(null);
 
   // Filter out the starter routines that have been hidden/deleted by the user
   const activeStarters = starterRoutines.filter((sr) => !deletedStarterIds?.includes(sr.id));
@@ -352,6 +369,62 @@ export function RoutinesScreen() {
       await deleteRoutine(editingRoutineId!);
     }
     resetModalState();
+  };
+
+  const toggleBuilderMuscle = (muscleId: MuscleGroupId) =>
+    setBuilderMuscles((prev) =>
+      prev.includes(muscleId) ? prev.filter((item) => item !== muscleId) : [...prev, muscleId]
+    );
+
+  const toggleBuilderEquipment = (item: Equipment) =>
+    setBuilderEquipment((prev) =>
+      prev.includes(item) ? prev.filter((entry) => entry !== item) : [...prev, item]
+    );
+
+  const handleGenerateRoutine = () => {
+    if (builderMuscles.length === 0) {
+      setBuilderError("Pick at least one muscle to target.");
+      return;
+    }
+
+    const setsPerExercise = Math.max(1, parseInt(builderSets, 10) || 4);
+    const generated = generateRoutine({
+      muscles: builderMuscles,
+      setsPerExercise,
+      exercisesPerMuscle: Math.max(1, parseInt(builderPerMuscle, 10) || 2),
+      equipment: builderEquipment,
+      allowWeighted: builderWeighted,
+    });
+
+    if (generated.length === 0) {
+      setBuilderError("No exercises match those constraints. Add equipment or allow weighted work.");
+      return;
+    }
+
+    const configs: Record<string, ExerciseConfig> = {};
+    generated.forEach((exercise) => {
+      const isHold = exercise.type === "skill-static" || checkIsHold(exercise.id);
+      configs[exercise.id] = {
+        sets: String(setsPerExercise),
+        reps: isHold ? "" : defaultRepsFor(exercise),
+        hold: isHold ? "30" : "",
+        specialType: "normal",
+        dropsetsPerSet: "1",
+        supersetWithNext: false,
+      };
+    });
+
+    setBuilderError(null);
+    setIsBuilderVisible(false);
+    setEditingRoutineId(null);
+    setRoutineName(`${builderMuscles.slice(0, 2).join(" & ")} Session`);
+    setRoutineDescription(
+      `${builderWeighted ? "Weighted" : "Bodyweight"} routine targeting ${builderMuscles.join(", ")}.`
+    );
+    setSelectedExerciseIds(generated.map((exercise) => exercise.id));
+    setExerciseConfigs(configs);
+    setCreationStep(2);
+    setIsModalVisible(true);
   };
 
   const resetModalState = () => {
@@ -722,10 +795,119 @@ export function RoutinesScreen() {
         </View>
       </Modal>
 
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={isBuilderVisible}
+        onRequestClose={() => setIsBuilderVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Smart Routine Builder</Text>
+
+            <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+              <Text style={styles.sectionLabel}>Muscles targeted</Text>
+              <View style={styles.filterRow}>
+                {MUSCLE_FILTERS.map((muscle) => {
+                  const isActive = builderMuscles.includes(muscle as MuscleGroupId);
+                  return (
+                    <Pressable
+                      key={muscle}
+                      style={[styles.chip, isActive && styles.chipActive]}
+                      onPress={() => toggleBuilderMuscle(muscle as MuscleGroupId)}
+                    >
+                      <Text style={[styles.chipText, isActive && styles.chipTextActive]}>{muscle}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <Text style={styles.sectionLabel}>Equipment available</Text>
+              <View style={styles.filterRow}>
+                {EQUIPMENT_OPTIONS.map((item) => {
+                  const isActive = builderEquipment.includes(item);
+                  return (
+                    <Pressable
+                      key={item}
+                      style={[styles.chip, isActive && styles.chipActive]}
+                      onPress={() => toggleBuilderEquipment(item)}
+                    >
+                      <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
+                        {EQUIPMENT_LABELS[item]}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <Text style={styles.sectionLabel}>Volume</Text>
+              <View style={styles.builderRow}>
+                <NumericInput
+                  style={[styles.smallInput, { width: 70 }]}
+                  value={builderSets}
+                  onChangeText={setBuilderSets}
+                  maxLength={2}
+                  label="Sets per exercise"
+                />
+                <NumericInput
+                  style={[styles.smallInput, { width: 70 }]}
+                  value={builderPerMuscle}
+                  onChangeText={setBuilderPerMuscle}
+                  maxLength={2}
+                  label="Exercises per muscle"
+                />
+              </View>
+
+              <View style={styles.builderToggleRow}>
+                <Text style={styles.inputLabel}>Allow weighted exercises</Text>
+                <Switch
+                  value={builderWeighted}
+                  onValueChange={setBuilderWeighted}
+                  trackColor={{ false: theme.colors.border, true: theme.colors.accent }}
+                  thumbColor={theme.colors.textPrimary}
+                />
+              </View>
+
+              {builderError && <Text style={styles.builderError}>{builderError}</Text>}
+            </ScrollView>
+
+            <View style={styles.modalButtons}>
+              <Pressable
+                style={[styles.modalButton, styles.modalCancelButton]}
+                onPress={() => setIsBuilderVisible(false)}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.modalButton,
+                  styles.modalConfirmButton,
+                  builderMuscles.length === 0 && styles.disabledButton,
+                ]}
+                onPress={handleGenerateRoutine}
+                disabled={builderMuscles.length === 0}
+              >
+                <Text style={styles.modalConfirmText}>Generate</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
 <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
 
         <Pressable style={styles.createButton} onPress={handleCreatePress}>
           <Text style={styles.createButtonText}>+ Create Custom Routine</Text>
+        </Pressable>
+
+        <Pressable
+          style={styles.createButton}
+          onPress={() => {
+            setBuilderError(null);
+            setIsBuilderVisible(true);
+          }}
+        >
+          <Text style={styles.createButtonText}>⚡ Smart Routine Builder</Text>
         </Pressable>
 
         <View style={styles.list}>
@@ -807,6 +989,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   createButtonText: { color: theme.colors.accent, fontWeight: "600", fontSize: 15 },
+  builderRow: { flexDirection: "row", gap: 16, alignItems: "flex-end", marginTop: 4 },
+  builderToggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 12,
+  },
+  builderError: { fontSize: 12, color: theme.colors.danger, marginTop: 10 },
 
   cardContainer: {
     backgroundColor: theme.colors.surface,
@@ -969,6 +1159,13 @@ deleteButtonText: {
     alignItems: "center",
     gap: 6,
     paddingHorizontal: 4,
+  },
+  filterRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 8,
   },
   chip: {
     paddingHorizontal: 12,
