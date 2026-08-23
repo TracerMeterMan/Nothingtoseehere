@@ -68,10 +68,10 @@ export function RecoveryScreen() {
   return (
     <Screen padded={false}>
       <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.header}>
+        <View style={styles.summaryCard}>
+          <Text style={styles.summaryValue}>{overallRecoveryPercent}% recovered</Text>
           <Text style={styles.body}>
-            {readyCount}/{recoveryItems.length} muscles fully recovered.{" "}
-            {overallRecoveryPercent}% overall body recovery.
+            {readyCount}/{recoveryItems.length} muscles fully recovered
           </Text>
         </View>
 
@@ -112,8 +112,18 @@ const styles = StyleSheet.create({
     paddingBottom: theme.spacing.xl,
     gap: theme.spacing.lg,
   },
-  header: {
-    gap: theme.spacing.sm,
+  summaryCard: {
+    gap: theme.spacing.xs,
+    padding: theme.spacing.md,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+  },
+  summaryValue: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: theme.colors.textPrimary,
   },
   title: {
     ...theme.typography.title,

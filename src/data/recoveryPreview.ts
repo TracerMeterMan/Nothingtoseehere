@@ -8,7 +8,7 @@ export const recoveryPreview: MuscleRecoveryPreview[] = [
     hoursRemaining: 6,
   },
   {
-    muscleId: "upperBack",
+    muscleId: "rhomboids",
     fatigueScore: 18,
     status: "ready",
     hoursRemaining: 0,

@@ -30,6 +30,16 @@ import NumericInput from "@/components/ui/NumericInput";
 import { Routine, RoutineExercise } from "../models/routine";
 import { MuscleRecoveryPreview } from "../models/muscle";
 import { calculateRecovery } from "../utils/recovery";
+import { isHoldExercise } from "../utils/exerciseClassification";
+import {
+  creditStreakDay,
+  emptyStreakState,
+  endDeload,
+  resolveStreak,
+  startDeload,
+  StreakState,
+  STREAK_STATE_KEY,
+} from "../utils/streak";
 
 import {
   formatSetLabel,
@@ -102,6 +112,9 @@ export function HomeScreen() {
   const [sessionSpecialType, setSessionSpecialType] = useState<"normal" | "dropset">("normal");
   const [sessionDropsetsPerSet, setSessionDropsetsPerSet] = useState("1");
   const [sessionSupersetWithNext, setSessionSupersetWithNext] = useState(false);
+
+  // Split adherence streak (frozen while deloading)
+  const [streakState, setStreakState] = useState<StreakState>(emptyStreakState);
 
   // Status trackers for today's pipeline
   const [completedRoutineIds, setCompletedRoutineIds] = useState([]);
@@ -482,6 +495,48 @@ export function HomeScreen() {
     initStorageData();
   }, [isLoading]);
 
+  const persistStreakState = useCallback(async (next: StreakState) => {
+    setStreakState(next);
+    try {
+      await AsyncStorage.setItem(STREAK_STATE_KEY, JSON.stringify(next));
+    } catch (e) {
+      console.error("Failed to persist streak state", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    const loadStreak = async () => {
+      try {
+        const saved = await AsyncStorage.getItem(STREAK_STATE_KEY);
+        const parsed = saved ? { ...emptyStreakState, ...JSON.parse(saved) } : emptyStreakState;
+        const resolved = resolveStreak(parsed);
+        setStreakState(resolved);
+        if (JSON.stringify(resolved) !== JSON.stringify(parsed)) {
+          await AsyncStorage.setItem(STREAK_STATE_KEY, JSON.stringify(resolved));
+        }
+      } catch (e) {
+        console.error("Failed to load streak state", e);
+      }
+    };
+    loadStreak();
+  }, []);
+
+  // A day counts once every routine the split scheduled is done — a scheduled
+  // rest day counts as following the split too.
+  const followedSplitToday =
+    !!activeSplit &&
+    (todaysRoutineIds.length === 0 ||
+      todaysRoutineIds.every((routineId) => completedRoutineIds.includes(routineId)));
+
+  useEffect(() => {
+    if (!followedSplitToday || streakState.deloadActive) return;
+    const credited = creditStreakDay(streakState);
+    if (credited !== streakState) persistStreakState(credited);
+  }, [followedSplitToday, streakState, persistStreakState]);
+
+  const toggleDeload = () =>
+    persistStreakState(streakState.deloadActive ? endDeload(streakState) : startDeload(streakState));
+
   const buildCurrentWorkoutStateEntry = () => ({
     selectedRoutine,
     activeExerciseInstanceId,
@@ -696,16 +751,26 @@ export function HomeScreen() {
     return rootId || cleaned;
   };
 
-  // Helper: Find the last logged performance for an exercise
+  // Progression-specific key: Tuck Planche and Straddle Planche stay separate so
+  // smart logging and PRs never bleed between progressions of the same skill.
+  const normalizeProgressionKey = (rawName) => {
+    if (!rawName) return "";
+    const cleaned = cleanExerciseNameForSignature(rawName);
+    const match = findExerciseLibraryMatch(cleaned);
+    return match?.id || cleaned;
+  };
+
+  // Helper: Find the last logged performance for an exercise.
+  // setLog and session.sets are newest-first, so the first match wins.
   const getLastLoggedPerformance = useCallback(
     (targetExerciseName: string) => {
       if (!targetExerciseName) return null;
-      const targetKey = normalizeExerciseKey(targetExerciseName);
+      const targetKey = normalizeProgressionKey(targetExerciseName);
 
       // 1. Check current workout session setLog first
-      for (let i = setLog.length - 1; i >= 0; i--) {
+      for (let i = 0; i < setLog.length; i++) {
         const loggedSet = setLog[i];
-        if (normalizeExerciseKey(loggedSet.exercise) === targetKey) {
+        if (normalizeProgressionKey(loggedSet.exercise) === targetKey) {
           return {
             load: loggedSet.load ? String(loggedSet.load) : "",
             reps: loggedSet.reps ? String(loggedSet.reps) : "",
@@ -720,9 +785,9 @@ export function HomeScreen() {
         for (const session of workoutHistory) {
           if (!session.sets || !Array.isArray(session.sets)) continue;
 
-          for (let i = session.sets.length - 1; i >= 0; i--) {
+          for (let i = 0; i < session.sets.length; i++) {
             const pastSet = session.sets[i];
-            if (normalizeExerciseKey(pastSet.exercise) === targetKey) {
+            if (normalizeProgressionKey(pastSet.exercise) === targetKey) {
               return {
                 load: pastSet.load ? String(pastSet.load) : "",
                 reps: pastSet.reps ? String(pastSet.reps) : "",
@@ -860,143 +925,79 @@ export function HomeScreen() {
 
   const normalizeRoutineName = (name) => normalizeExerciseKey(name || "");
 
-  const getConfiguredPrType = (routineExercise, libraryMatch, isHold) => {
-    const rawType =
-      routineExercise?.prType ??
-      routineExercise?.metrics?.prType ??
-      libraryMatch?.prType ??
-      null;
+  const EPSILON = 0.0001;
 
-    const normalized = String(rawType || "")
-      .trim()
-      .toLowerCase()
-      .replace(/[\s_-]+/g, "");
-
-    if (isHold) return "totalHoldTime";
-
-    if (["repsatweight", "repsatload"].includes(normalized)) return "repsAtWeight";
-    if (["totalweight", "totalweightmax", "totalvolume", "maxvolume", "volume"].includes(normalized)) return "totalWeight";
-    if (["maxweightatreps", "weightatrep", "weightatreps", "maxweight"].includes(normalized)) return "maxWeightAtReps";
-
-    // Existing routines do not necessarily have a PR-type field yet. The safest
-    // default for normal weighted exercises is weight at the logged rep count.
-    return "maxWeightAtReps";
-  };
-
+  /**
+   * PR categories follow the exercise-library classification:
+   * static skills are scored on hold time, everything else on load and reps.
+   */
   const computePrReplacementForSet = (exerciseName, loadValue, repsValue, isHoldSet, currentSetLog = []) => {
-    const matchKey = normalizeExerciseKey(exerciseName);
+    const matchKey = normalizeProgressionKey(exerciseName);
     const normalizedLoad = parseFloat(loadValue) || 0;
     const normalizedReps = parseInt(repsValue, 10) || 0;
     if (!matchKey || normalizedReps <= 0) return null;
 
-    const libraryMatch = exerciseLibrary.find((exercise) => {
-      const names = [exercise.id, exercise.name].filter(Boolean).map((name) => normalizeExerciseKey(name));
-      return names.includes(matchKey);
-    });
-    const isStaticHold = !!isHoldSet || libraryMatch?.type === "skill-static";
-    const routineExercise = exercises.find((exercise) => {
-      const key = normalizeExerciseKey(exercise.exerciseId || "");
-      return key === matchKey || key === normalizeExerciseKey(libraryMatch?.id || "");
-    });
-    const prType = getConfiguredPrType(routineExercise, libraryMatch, isStaticHold);
+    const libraryMatch = exerciseLibrary.find((exercise) => exercise.id === matchKey) || null;
+    const isStaticHold = !!isHoldSet || isHoldExercise(libraryMatch);
+    const displayName = libraryMatch?.name || exerciseName;
 
-    const historicalSets = (workoutHistory || [])
-      .flatMap((session) => session.sets || [])
-      .filter((set) => normalizeExerciseKey(set.exercise) === matchKey)
-      .filter((set) => !!set.isHold === isStaticHold || isStaticHold);
+    // Every previously logged set of this exact progression, history + this session.
+    const previousSets = [
+      ...(currentSetLog || []),
+      ...(workoutHistory || []).flatMap((session) => session.sets || []),
+    ].filter((set) => normalizeProgressionKey(set.exercise) === matchKey);
 
-    const previousSessionTotals = (workoutHistory || [])
-      .map((session) => {
-        const matching = (session.sets || []).filter((set) => {
-          if (normalizeExerciseKey(set.exercise) !== matchKey) return false;
-          return !!set.isHold === isStaticHold || isStaticHold;
-        });
-        if (!matching.length) return null;
-        return isStaticHold
-          ? matching.reduce((sum, set) => sum + (parseInt(set.reps, 10) || 0), 0)
-          : matching.reduce((sum, set) => sum + ((parseFloat(set.load) || 0) * (parseInt(set.reps, 10) || 0)), 0);
-      })
-      .filter((value) => value !== null);
+    if (previousSets.length === 0) return null;
 
-    const priorCurrentWorkoutSets = (currentSetLog || []).filter((set) => {
-      if (normalizeExerciseKey(set.exercise) !== matchKey) return false;
-      return !!set.isHold === isStaticHold || isStaticHold;
-    });
+    const loadOf = (set) => parseFloat(set.load) || 0;
+    const repsOf = (set) => parseInt(set.reps, 10) || 0;
+    const bestOf = (sets, valueOf) => sets.reduce((best, set) => Math.max(best, valueOf(set)), 0);
+
+    const records: string[] = [];
 
     if (isStaticHold) {
-      const currentTotalHold = priorCurrentWorkoutSets.reduce(
-        (sum, set) => sum + (parseInt(set.reps, 10) || 0),
-        0
-      ) + normalizedReps;
-      const bestHistoricalTotalHold = previousSessionTotals.length
-        ? Math.max(...previousSessionTotals)
-        : 0;
+      const sameLoad = previousSets.filter((set) => Math.abs(loadOf(set) - normalizedLoad) < EPSILON);
+      const sameHold = previousSets.filter((set) => repsOf(set) === normalizedReps);
 
-      const previousCurrentTotalHold = priorCurrentWorkoutSets.reduce(
-        (sum, set) => sum + (parseInt(set.reps, 10) || 0),
-        0
-      );
-      if (currentTotalHold <= bestHistoricalTotalHold || bestHistoricalTotalHold <= 0 || previousCurrentTotalHold > bestHistoricalTotalHold) return null;
+      const bestHold = bestOf(previousSets, repsOf);
+      const bestHoldAtWeight = bestOf(sameLoad, repsOf);
+      const bestWeightAtHold = bestOf(sameHold, loadOf);
 
-      return {
-        title: "New Personal Record",
-        body: `${libraryMatch?.name || exerciseName}: ${currentTotalHold} sec total hold time — a new best for this progression.`,
-      };
+      if (bestHold > 0 && normalizedReps > bestHold) {
+        records.push(`Max hold time: ${normalizedReps}s (was ${bestHold}s)`);
+      }
+      if (normalizedLoad > 0 && bestHoldAtWeight > 0 && normalizedReps > bestHoldAtWeight) {
+        records.push(`Max hold time at ${normalizedLoad} kg: ${normalizedReps}s (was ${bestHoldAtWeight}s)`);
+      }
+      if (normalizedLoad > 0 && bestWeightAtHold > 0 && normalizedLoad > bestWeightAtHold) {
+        records.push(`Max weight at ${normalizedReps}s hold: ${normalizedLoad} kg (was ${bestWeightAtHold} kg)`);
+      }
+    } else {
+      if (normalizedLoad <= 0) return null;
+
+      const sameReps = previousSets.filter((set) => repsOf(set) === normalizedReps);
+      const sameLoad = previousSets.filter((set) => Math.abs(loadOf(set) - normalizedLoad) < EPSILON);
+
+      const bestWeight = bestOf(previousSets, loadOf);
+      const bestWeightAtReps = bestOf(sameReps, loadOf);
+      const bestRepsAtWeight = bestOf(sameLoad, repsOf);
+
+      if (bestWeight > 0 && normalizedLoad > bestWeight) {
+        records.push(`Max weight: ${normalizedLoad} kg (was ${bestWeight} kg)`);
+      }
+      if (bestWeightAtReps > 0 && normalizedLoad > bestWeightAtReps) {
+        records.push(`Max weight at ${normalizedReps} reps: ${normalizedLoad} kg (was ${bestWeightAtReps} kg)`);
+      }
+      if (bestRepsAtWeight > 0 && normalizedReps > bestRepsAtWeight) {
+        records.push(`Max reps at ${normalizedLoad} kg: ${normalizedReps} reps (was ${bestRepsAtWeight} reps)`);
+      }
     }
 
-    if (normalizedLoad <= 0) return null;
-
-    if (prType === "totalWeight") {
-      const currentTotalVolume = priorCurrentWorkoutSets.reduce(
-        (sum, set) => sum + ((parseFloat(set.load) || 0) * (parseInt(set.reps, 10) || 0)),
-        0
-      ) + (normalizedLoad * normalizedReps);
-      const bestHistoricalTotalVolume = previousSessionTotals.length
-        ? Math.max(...previousSessionTotals)
-        : 0;
-
-      const previousCurrentVolume = priorCurrentWorkoutSets.reduce(
-        (sum, set) => sum + ((parseFloat(set.load) || 0) * (parseInt(set.reps, 10) || 0)),
-        0
-      );
-      if (currentTotalVolume <= bestHistoricalTotalVolume || bestHistoricalTotalVolume <= 0 || previousCurrentVolume > bestHistoricalTotalVolume) return null;
-
-      return {
-        title: "New Personal Record",
-        body: `${libraryMatch?.name || exerciseName}: ${Math.round(currentTotalVolume * 10) / 10} kg total volume — a new best.`,
-      };
-    }
-
-    if (prType === "repsAtWeight") {
-      const bestHistoricalReps = historicalSets
-        .filter((set) => Math.abs((parseFloat(set.load) || 0) - normalizedLoad) < 0.0001)
-        .reduce((best, set) => Math.max(best, parseInt(set.reps, 10) || 0), 0);
-      const bestCurrentWorkoutReps = priorCurrentWorkoutSets
-        .filter((set) => Math.abs((parseFloat(set.load) || 0) - normalizedLoad) < 0.0001)
-        .reduce((best, set) => Math.max(best, parseInt(set.reps, 10) || 0), 0);
-      const previousBest = Math.max(bestHistoricalReps, bestCurrentWorkoutReps);
-
-      if (normalizedReps <= previousBest || previousBest <= 0) return null;
-
-      return {
-        title: "New Personal Record",
-        body: `${libraryMatch?.name || exerciseName}: ${normalizedReps} reps at ${normalizedLoad} kg — a new best.`,
-      };
-    }
-
-    const bestHistoricalWeightAtReps = historicalSets
-      .filter((set) => (parseInt(set.reps, 10) || 0) === normalizedReps)
-      .reduce((best, set) => Math.max(best, parseFloat(set.load) || 0), 0);
-    const bestCurrentWorkoutWeightAtReps = priorCurrentWorkoutSets
-      .filter((set) => (parseInt(set.reps, 10) || 0) === normalizedReps)
-      .reduce((best, set) => Math.max(best, parseFloat(set.load) || 0), 0);
-    const previousBestWeight = Math.max(bestHistoricalWeightAtReps, bestCurrentWorkoutWeightAtReps);
-
-    if (normalizedLoad <= previousBestWeight || previousBestWeight <= 0) return null;
+    if (records.length === 0) return null;
 
     return {
-      title: "New Personal Record",
-      body: `${libraryMatch?.name || exerciseName}: ${normalizedLoad} kg × ${normalizedReps} reps — a new best.`,
+      title: records.length > 1 ? "New Personal Records" : "New Personal Record",
+      body: `${displayName}\n${records.join("\n")}`,
     };
   };
 
@@ -1705,6 +1706,11 @@ export function HomeScreen() {
     }
   };
 
+  const cancelDeleteSplit = () => {
+    setSplitToDelete(null);
+    setIsSplitPickerVisible(true);
+  };
+
   const confirmDeleteSplit = async () => {
     if (!splitToDelete?.id) return;
 
@@ -1714,6 +1720,7 @@ export function HomeScreen() {
 
     setSplitProfiles(updatedProfiles);
     setSplitToDelete(null);
+    setIsSplitPickerVisible(true);
 
     if (deletingActive) {
       setActiveSplit(null);
@@ -1974,6 +1981,8 @@ export function HomeScreen() {
                         hitSlop={8}
                         onPress={(event) => {
                           event.stopPropagation();
+                          // Only one modal at a time: hand over to the confirmation.
+                          setIsSplitPickerVisible(false);
                           setSplitToDelete(split);
                         }}
                       >
@@ -1989,6 +1998,27 @@ export function HomeScreen() {
             <Pressable style={[styles.secondaryButton, { marginTop: 12 }]} onPress={() => setIsSplitPickerVisible(false)}>
               <Text style={styles.secondaryText}>Close</Text>
             </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Delete Split Confirmation — mirrors the End Workout Early modal */}
+      <Modal animationType="fade" transparent visible={!!splitToDelete} onRequestClose={cancelDeleteSplit}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Delete Split?</Text>
+            <Text style={styles.modalBody}>
+              Are you sure you want to delete "{splitToDelete?.name}"? This removes the split and its day assignments permanently.
+            </Text>
+
+            <View style={styles.modalVerticalButtons}>
+              <Button variant="destructive" onPress={confirmDeleteSplit}>
+                Delete Split
+              </Button>
+              <Button variant="text" onPress={cancelDeleteSplit}>
+                Cancel
+              </Button>
+            </View>
           </View>
         </View>
       </Modal>
@@ -2268,6 +2298,30 @@ export function HomeScreen() {
                   </Pressable>
                 </View>
               ) : null}
+            </View>
+
+            {/* Split adherence streak */}
+            <View style={styles.streakBlock}>
+              <View style={styles.streakInfo}>
+                <Text style={styles.streakValue}>
+                  {streakState.streak} day{streakState.streak === 1 ? "" : "s"}
+                </Text>
+                <Text style={styles.streakLabel}>
+                  {streakState.deloadActive
+                    ? "Streak frozen — deload in progress"
+                    : followedSplitToday
+                    ? "Split followed today · best " + streakState.bestStreak
+                    : "Finish today's split to extend it · best " + streakState.bestStreak}
+                </Text>
+              </View>
+              <Pressable
+                style={[styles.deloadButton, streakState.deloadActive && styles.deloadButtonActive]}
+                onPress={toggleDeload}
+              >
+                <Text style={[styles.deloadButtonText, streakState.deloadActive && styles.deloadButtonTextActive]}>
+                  {streakState.deloadActive ? "End Deload" : "Deload"}
+                </Text>
+              </Pressable>
             </View>
 
             {/* Paused Workouts Section */}
@@ -3108,6 +3162,15 @@ const styles = StyleSheet.create({
   restDayTitle: { fontSize: 18, fontWeight: "700", color: theme.colors.textPrimary },
   restDaySubtitle: { fontSize: 14, color: theme.colors.textSecondary, textAlign: "center", marginBottom: 10 },
   
+  streakBlock: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12, backgroundColor: theme.colors.surface, padding: 14, borderRadius: 16, borderWidth: 1, borderColor: theme.colors.border, width: "100%" },
+  streakInfo: { flex: 1, gap: 2 },
+  streakValue: { fontSize: 18, fontWeight: "700", color: theme.colors.textPrimary },
+  streakLabel: { fontSize: 12, color: theme.colors.textSecondary },
+  deloadButton: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceRaised },
+  deloadButtonActive: { borderColor: theme.colors.warning, backgroundColor: theme.colors.warningSoft },
+  deloadButtonText: { fontSize: 13, fontWeight: "600", color: theme.colors.textSecondary },
+  deloadButtonTextActive: { color: theme.colors.warning },
+
   pausedWorkoutsBlock: { backgroundColor: "rgba(0,0,0,0.02)", padding: 14, borderRadius: 16, borderWidth: 1, borderColor: theme.colors.border, gap: 10, marginTop: 4 },
   pausedBlockTitle: { fontSize: 14, fontWeight: "700", color: theme.colors.textPrimary },
   pausedWorkoutCardRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: theme.colors.surface, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border },

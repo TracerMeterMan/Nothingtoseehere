@@ -183,11 +183,11 @@ export function BodyRecoveryMap({
         />
         <LegendDot
           color={theme.colors.warning}
-          label="Soon"
+          label="Light / moderate fatigue"
         />
         <LegendDot
           color={theme.colors.danger}
-          label="Not ready"
+          label="High fatigue"
         />
       </View>
 
@@ -255,10 +255,6 @@ function AnatomyFigure({
 }) {
   return (
     <View style={styles.figure}>
-      <Text style={styles.figureTitle}>
-        {title}
-      </Text>
-
       <Svg
         width="100%"
         height={360}
@@ -372,14 +368,15 @@ const styles = StyleSheet.create({
   container: {
     gap: theme.spacing.md,
     padding: theme.spacing.md,
-    borderRadius: 8,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
   },
 
   title: {
-    ...theme.typography.heading,
+    fontSize: 18,
+    fontWeight: "700",
     color: theme.colors.textPrimary,
   },
 
@@ -433,7 +430,7 @@ const styles = StyleSheet.create({
   },
 
   toggleTextActive: {
-    color: theme.colors.textPrimary,
+    color: "#ffffff",
     fontWeight: "700",
   },
 
@@ -451,8 +448,4 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
 
-  figureTitle: {
-    ...theme.typography.body,
-    color: theme.colors.textSecondary,
-  },
 });
