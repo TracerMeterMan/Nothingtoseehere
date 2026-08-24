@@ -999,7 +999,7 @@ export function RoutinesScreen() {
             setIsBuilderVisible(true);
           }}
         >
-          <Text style={styles.createButtonText}>⚡ Smart Routine Builder</Text>
+          <Text style={styles.createButtonText}>Generate Routine</Text>
         </Pressable>
 
         <View style={styles.list}>
