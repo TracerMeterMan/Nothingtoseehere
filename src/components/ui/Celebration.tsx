@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Dimensions, Pressable, StyleSheet, Text, View, Easing } from 'react-native';
 
 interface CongratulationsAnimationProps {
@@ -16,6 +16,8 @@ export const CongratulationsAnimation: React.FC<CongratulationsAnimationProps> =
   onAnimationFinish,
 }) => {
   const isWorkoutComplete = variant === 'workoutFinish';
+  // The card sticks around until dismissed, but the confetti clears itself.
+  const [confettiVisible, setConfettiVisible] = useState(true);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.82)).current;
   const badgeGlow = useRef(new Animated.Value(0)).current;
@@ -66,6 +68,7 @@ export const CongratulationsAnimation: React.FC<CongratulationsAnimationProps> =
     ).start();
 
     let dismissTimeout: ReturnType<typeof setTimeout> | null = null;
+    const confettiTimeout = setTimeout(() => setConfettiVisible(false), 2600);
 
     if (!isWorkoutComplete) {
       Animated.stagger(
@@ -128,6 +131,7 @@ export const CongratulationsAnimation: React.FC<CongratulationsAnimationProps> =
     }
 
     return () => {
+      clearTimeout(confettiTimeout);
       if (dismissTimeout) {
         clearTimeout(dismissTimeout);
       }
@@ -151,7 +155,7 @@ export const CongratulationsAnimation: React.FC<CongratulationsAnimationProps> =
     >
       {/* Confetti Layer */}
       <View style={styles.fullscreenBurst} pointerEvents="none">
-        {confettiOffsets.map((offset, index) => {
+        {(confettiVisible ? confettiOffsets : []).map((offset, index) => {
           const anim = confettiAnims[index];
           return (
             <Animated.View

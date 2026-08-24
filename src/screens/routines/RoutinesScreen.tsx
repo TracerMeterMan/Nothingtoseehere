@@ -10,7 +10,7 @@ import NumericInput from "../../components/ui/NumericInput";
 import { Routine, RoutineExercise } from "../../models/routine";
 import { MuscleGroupId } from "../../models/muscle";
 import { Equipment } from "../../models/exercise";
-import { EQUIPMENT_LABELS } from "../../utils/exerciseClassification";
+import { EQUIPMENT_LABELS, isHoldExercise } from "../../utils/exerciseClassification";
 import { defaultRepsFor, generateRoutine } from "../../utils/routineGenerator";
 const buildConfigGroups = (
   selectedExerciseIds: string[],
@@ -52,7 +52,10 @@ const buildConfigGroups = (
 };
 
 // Helper to check if an exercise is a hold-style movement
-const checkIsHold = (id: string) => id.includes("hold") || id.includes("plank");
+const checkIsHold = (id: string) =>
+  isHoldExercise(exerciseLibrary.find((exercise) => exercise.id === id)) ||
+  id.includes("hold") ||
+  id.includes("plank");
 
 // ─── Routine Insights ────────────────────────────────────────────────────────
 const CORE_MUSCLES = ["abs", "obliques", "lowerBack", "hipFlexors"];
@@ -134,8 +137,9 @@ const MODALITY_FILTERS = ["barbells", "dumbbells", "calisthenics", "cables"];
 const TYPE_FILTERS = ["compound", "isolation", "skill-static", "skill-dynamic"];
 const MUSCLE_FILTERS = [ "chest", "rhomboids", "lats", "traps", "frontDelts", "sideDelts", "rearDelts", "biceps", "triceps", "forearms", "abs", "obliques", "lowerBack", "glutes", "quads", "hamstrings", "calves", "hipFlexors"];
 
+// Parallettes are left out on purpose: the floor covers those movements.
 const EQUIPMENT_OPTIONS = Object.keys(EQUIPMENT_LABELS).filter(
-  (item) => item !== "none"
+  (item) => item !== "none" && item !== "parallettes"
 ) as Equipment[];
 
 interface ExerciseConfig {
@@ -181,11 +185,9 @@ export function RoutinesScreen() {
   const [builderName, setBuilderName] = useState("");
   const [builderMuscles, setBuilderMuscles] = useState<MuscleGroupId[]>([]);
   const [builderEquipment, setBuilderEquipment] = useState<Equipment[]>([]);
-  const [builderVolume, setBuilderVolume] = useState<Record<string, { sets: string; exercises: string }>>({});
-  const [builderApplySets, setBuilderApplySets] = useState("3");
-  const [builderApplyExercises, setBuilderApplyExercises] = useState("2");
+  const [builderSets, setBuilderSets] = useState(3);
+  const [builderExercisesPerMuscle, setBuilderExercisesPerMuscle] = useState(2);
   const [builderWeighted, setBuilderWeighted] = useState(true);
-  const [builderCompounds, setBuilderCompounds] = useState(true);
   const [builderError, setBuilderError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -388,25 +390,6 @@ export function RoutinesScreen() {
     resetModalState();
   };
 
-  const volumeFor = (muscleId: string) =>
-    builderVolume[muscleId] || { sets: builderApplySets, exercises: builderApplyExercises };
-
-  const setVolumeFor = (muscleId: string, key: "sets" | "exercises", value: string) =>
-    setBuilderVolume((prev) => ({
-      ...prev,
-      [muscleId]: { ...volumeFor(muscleId), [key]: value },
-    }));
-
-  const applyVolumeToAll = () =>
-    setBuilderVolume(
-      Object.fromEntries(
-        builderMuscles.map((muscleId) => [
-          muscleId,
-          { sets: builderApplySets, exercises: builderApplyExercises },
-        ])
-      )
-    );
-
   const toggleBuilderMuscle = (muscleId: MuscleGroupId) =>
     setBuilderMuscles((prev) =>
       prev.includes(muscleId) ? prev.filter((item) => item !== muscleId) : [...prev, muscleId]
@@ -440,19 +423,16 @@ export function RoutinesScreen() {
     }
 
     const result = generateRoutine({
-      muscles: builderMuscles.map((muscleId) => ({
-        muscleId,
-        exercises: Math.max(1, parseInt(volumeFor(muscleId).exercises, 10) || 2),
-        setsPerExercise: Math.max(1, parseInt(volumeFor(muscleId).sets, 10) || 3),
-      })),
+      muscles: builderMuscles,
       equipment: builderEquipment,
+      exercisesPerMuscle: builderExercisesPerMuscle,
+      setsPerExercise: builderSets,
       allowWeighted: builderWeighted,
-      allowCompounds: builderCompounds,
     });
 
     if (result.exercises.length === 0) {
       setBuilderError(
-        "Nothing matches those constraints. Add equipment, allow weighted work or compounds — or build the routine yourself."
+        "Nothing matches those picks. Add equipment or allow weights — or build the routine yourself."
       );
       return;
     }
@@ -462,7 +442,7 @@ export function RoutinesScreen() {
         .map((entry) => `${entry.muscleId} (${entry.available}/${entry.requested})`)
         .join(", ");
       setBuilderError(
-        `Not enough matching exercises for ${detail}. Add equipment, allow compounds or lower the exercises per muscle — or create the routine yourself.`
+        `Not enough exercises for ${detail}. Add equipment, allow weights or drop to fewer per muscle — or build the routine yourself.`
       );
       return;
     }
@@ -935,46 +915,34 @@ export function RoutinesScreen() {
                 })}
               </View>
 
-              <Text style={styles.sectionLabel}>Volume</Text>
-              <View style={styles.builderRow}>
-                <NumericInput
-                  style={[styles.smallInput, { width: 70 }]}
-                  value={builderApplySets}
-                  onChangeText={setBuilderApplySets}
-                  maxLength={2}
-                  label="Sets per exercise"
-                />
-                <NumericInput
-                  style={[styles.smallInput, { width: 70 }]}
-                  value={builderApplyExercises}
-                  onChangeText={setBuilderApplyExercises}
-                  maxLength={2}
-                  label="Exercises per muscle"
-                />
-                <Pressable style={styles.builderMiniButton} onPress={applyVolumeToAll}>
-                  <Text style={styles.builderMiniButtonText}>Apply to all</Text>
+              <Text style={styles.sectionLabel}>How much per muscle</Text>
+              <View style={styles.stepperRow}>
+                <Text style={styles.stepperLabel}>Exercises</Text>
+                <Pressable
+                  style={styles.stepperButton}
+                  onPress={() => setBuilderExercisesPerMuscle((value) => Math.max(1, value - 1))}
+                >
+                  <Text style={styles.stepperButtonText}>−</Text>
+                </Pressable>
+                <Text style={styles.stepperValue}>{builderExercisesPerMuscle}</Text>
+                <Pressable
+                  style={styles.stepperButton}
+                  onPress={() => setBuilderExercisesPerMuscle((value) => Math.min(6, value + 1))}
+                >
+                  <Text style={styles.stepperButtonText}>+</Text>
                 </Pressable>
               </View>
 
-              {builderMuscles.map((muscleId) => (
-                <View key={muscleId} style={styles.builderRow}>
-                  <Text style={[styles.inputLabel, { flex: 1 }]}>{muscleId}</Text>
-                  <NumericInput
-                    style={[styles.smallInput, { width: 60 }]}
-                    value={volumeFor(muscleId).sets}
-                    onChangeText={(value) => setVolumeFor(muscleId, "sets", value)}
-                    maxLength={2}
-                    label="Sets"
-                  />
-                  <NumericInput
-                    style={[styles.smallInput, { width: 60 }]}
-                    value={volumeFor(muscleId).exercises}
-                    onChangeText={(value) => setVolumeFor(muscleId, "exercises", value)}
-                    maxLength={2}
-                    label="Exercises"
-                  />
-                </View>
-              ))}
+              <View style={styles.stepperRow}>
+                <Text style={styles.stepperLabel}>Sets each</Text>
+                <Pressable style={styles.stepperButton} onPress={() => setBuilderSets((value) => Math.max(1, value - 1))}>
+                  <Text style={styles.stepperButtonText}>−</Text>
+                </Pressable>
+                <Text style={styles.stepperValue}>{builderSets}</Text>
+                <Pressable style={styles.stepperButton} onPress={() => setBuilderSets((value) => Math.min(8, value + 1))}>
+                  <Text style={styles.stepperButtonText}>+</Text>
+                </Pressable>
+              </View>
 
               <View style={styles.builderToggleRow}>
                 <Text style={styles.inputLabel}>Allow weighted exercises</Text>
@@ -986,15 +954,10 @@ export function RoutinesScreen() {
                 />
               </View>
 
-              <View style={styles.builderToggleRow}>
-                <Text style={styles.inputLabel}>Include compounds</Text>
-                <Switch
-                  value={builderCompounds}
-                  onValueChange={setBuilderCompounds}
-                  trackColor={{ false: theme.colors.border, true: theme.colors.accent }}
-                  thumbColor={theme.colors.textPrimary}
-                />
-              </View>
+              <Text style={styles.builderHint}>
+                Each exercise trains exactly one of your picked muscles hard, so
+                {` ${builderMuscles.length} muscle(s) × ${builderExercisesPerMuscle} = ${builderMuscles.length * builderExercisesPerMuscle} exercises.`}
+              </Text>
 
               {builderError && <Text style={styles.builderError}>{builderError}</Text>}
             </ScrollView>
@@ -1033,7 +996,6 @@ export function RoutinesScreen() {
           onPress={() => {
             setBuilderError(null);
             setBuilderName("");
-            setBuilderVolume({});
             setIsBuilderVisible(true);
           }}
         >
@@ -1135,6 +1097,32 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surfaceRaised,
   },
   builderMiniButtonText: { fontSize: 12, fontWeight: "600", color: theme.colors.textSecondary },
+  stepperRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginTop: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+  },
+  stepperLabel: { flex: 1, fontSize: 14, fontWeight: "600", color: theme.colors.textPrimary },
+  stepperButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+  },
+  stepperButtonText: { fontSize: 18, fontWeight: "700", color: theme.colors.textPrimary, lineHeight: 20 },
+  stepperValue: { minWidth: 24, textAlign: "center", fontSize: 16, fontWeight: "700", color: theme.colors.textPrimary },
+  builderHint: { marginTop: 12, fontSize: 12, lineHeight: 18, color: theme.colors.textMuted },
   builderToggleRow: {
     flexDirection: "row",
     alignItems: "center",

@@ -1593,6 +1593,20 @@ export const exerciseLibrary: Exercise[] = [
   // 8. CALISTHENICS SKILLS & PROGRESSIONS
   // ==========================================
 
+  {
+    id: "hollow-body-hold",
+    name: "Hollow Body Hold",
+    category: "skill",
+    modality: "calisthenics",
+    type: "skill-static",
+    prMetric: "hold",
+    defaultRestSeconds: 90,
+    muscles: [
+      { muscleId: "abs", load: "high" },
+      { muscleId: "hipFlexors", load: "low" }
+    ]
+  },
+
   // --- Planche Tree ---
   {
     id: "frog-stand",

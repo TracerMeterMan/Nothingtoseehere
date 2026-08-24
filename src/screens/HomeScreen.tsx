@@ -119,6 +119,8 @@ export function HomeScreen() {
   // Status trackers for today's pipeline
   const [completedRoutineIds, setCompletedRoutineIds] = useState([]);
   const [partialRoutineIds, setPartialRoutineIds] = useState([]);
+  // Routines whose exercises were deleted mid-workout: they can't credit the day.
+  const [trimmedRoutineIds, setTrimmedRoutineIds] = useState<string[]>([]);
 
   // Dictionary of all active states indexed by routineId
   const [allActiveStates, setAllActiveStates] = useState({});
@@ -194,7 +196,10 @@ export function HomeScreen() {
     ? "Hold"
     : "";
 
-  const isHold = selectedExerciseData?.type === "skill-static" || selectedExerciseData?.targetHoldSeconds !== undefined;
+  const isHold =
+    isHoldExercise(selectedExerciseData) ||
+    selectedExerciseData?.targetHoldSeconds !== undefined ||
+    currentExercise?.targetHoldSeconds !== undefined;
 
   const exerciseGroups = groupExercisesForDisplay(exercises);
 
@@ -1406,7 +1411,7 @@ export function HomeScreen() {
 
       if (uncompletedRemaining.length === 0) {
         const routineId = selectedRoutine?.id;
-        const isDaySplitTarget = todaysRoutineIds.includes(routineId);
+        const isDaySplitTarget = todaysRoutineIds.includes(routineId) && !trimmedRoutineIds.includes(routineId);
 
         if (routineId && isDaySplitTarget) {
           const nextIds = [...completedRoutineIds, routineId];
@@ -1561,6 +1566,25 @@ export function HomeScreen() {
       setDropIndex(0);
       setRestTargetExerciseInstanceId(null);
       setPhase("waiting");
+    }
+
+    // Dropping exercises means the scheduled session was not actually completed,
+    // so this routine can no longer credit the day's split.
+    setTrimmedRoutineIds((ids) =>
+      selectedRoutine.id && !ids.includes(selectedRoutine.id) ? [...ids, selectedRoutine.id] : ids
+    );
+
+    if (selectedRoutine.id && completedRoutineIds.includes(selectedRoutine.id)) {
+      const nextIds = completedRoutineIds.filter((id) => id !== selectedRoutine.id);
+      setCompletedRoutineIds(nextIds);
+      AsyncStorage.setItem(
+        COMPLETED_ROUTINES_TODAY_KEY,
+        JSON.stringify({
+          date: new Date().toDateString(),
+          completedIds: nextIds,
+          partialIds: partialRoutineIds,
+        })
+      );
     }
 
     setCompletedInstanceIds((ids) => ids.filter((id) => id !== targetItem.instanceId));
@@ -2308,16 +2332,25 @@ export function HomeScreen() {
               ) : null}
             </View>
 
-            {/* Split adherence streak — the fire lights up once today's split is done */}
-            <View style={styles.streakBlock}>
-              <View
-                style={[
-                  styles.streakChip,
-                  followedSplitToday && !streakState.deloadActive && styles.streakChipActive,
-                  streakState.deloadActive && styles.streakChipFrozen,
-                ]}
+            {/* Streak sits in the corner: fire lights up once today's split is done */}
+            <View style={styles.streakCornerRow}>
+              <Pressable
+                style={[styles.deloadButton, streakState.deloadActive && styles.deloadButtonActive]}
+                onPress={toggleDeload}
               >
-                <Text style={[styles.streakFlame, !followedSplitToday && styles.streakFlameIdle]}>🔥</Text>
+                <Text style={[styles.deloadButtonText, streakState.deloadActive && styles.deloadButtonTextActive]}>
+                  {streakState.deloadActive ? "End Deload" : "Deload"}
+                </Text>
+              </Pressable>
+              <View style={styles.streakCorner}>
+                <Text
+                  style={[
+                    styles.streakFlame,
+                    !(followedSplitToday && !streakState.deloadActive) && styles.streakFlameIdle,
+                  ]}
+                >
+                  🔥
+                </Text>
                 <Text
                   style={[
                     styles.streakValue,
@@ -2327,21 +2360,6 @@ export function HomeScreen() {
                   {streakState.streak}
                 </Text>
               </View>
-              <Text style={styles.streakLabel}>
-                {streakState.deloadActive
-                  ? "Streak frozen while deloading"
-                  : followedSplitToday
-                  ? "Split followed today"
-                  : "Finish today's split to keep it alive"}
-              </Text>
-              <Pressable
-                style={[styles.deloadButton, streakState.deloadActive && styles.deloadButtonActive]}
-                onPress={toggleDeload}
-              >
-                <Text style={[styles.deloadButtonText, streakState.deloadActive && styles.deloadButtonTextActive]}>
-                  {streakState.deloadActive ? "End Deload" : "Deload"}
-                </Text>
-              </Pressable>
             </View>
 
             {/* Paused Workouts Section */}
@@ -3182,15 +3200,12 @@ const styles = StyleSheet.create({
   restDayTitle: { fontSize: 18, fontWeight: "700", color: theme.colors.textPrimary },
   restDaySubtitle: { fontSize: 14, color: theme.colors.textSecondary, textAlign: "center", marginBottom: 10 },
   
-  streakBlock: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: theme.colors.surface, padding: 14, borderRadius: 16, borderWidth: 1, borderColor: theme.colors.border, width: "100%" },
-  streakChip: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceRaised },
-  streakChipActive: { borderColor: theme.colors.warning, backgroundColor: theme.colors.warningSoft },
-  streakChipFrozen: { borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceRaised },
-  streakFlame: { fontSize: 16 },
-  streakFlameIdle: { opacity: 0.4 },
-  streakValue: { fontSize: 16, fontWeight: "700", color: theme.colors.textSecondary },
+  streakCornerRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 10, width: "100%" },
+  streakCorner: { flexDirection: "row", alignItems: "center", gap: 4 },
+  streakFlame: { fontSize: 20 },
+  streakFlameIdle: { opacity: 0.3 },
+  streakValue: { fontSize: 16, fontWeight: "700", color: theme.colors.textMuted },
   streakValueActive: { color: theme.colors.warning },
-  streakLabel: { flex: 1, fontSize: 12, color: theme.colors.textSecondary },
   deloadButton: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceRaised },
   deloadButtonActive: { borderColor: theme.colors.warning, backgroundColor: theme.colors.warningSoft },
   deloadButtonText: { fontSize: 13, fontWeight: "600", color: theme.colors.textSecondary },
