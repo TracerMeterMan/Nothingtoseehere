@@ -87,8 +87,6 @@ export function MetricsScreen() {
   const [selectedMuscle, setSelectedMuscle] = useState<string | null>(null);
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
 
-  const [repFilter, setRepFilter] = useState<string>("");
-  const [showRepInput, setShowRepInput] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
   const ITEMS_PER_PAGE = 5;
@@ -207,7 +205,8 @@ export function MetricsScreen() {
   // Static skills are tracked separately from rep-based exercises: seconds are the
   // performance metric, with weight only used as a secondary tie-breaker/filter.
   const prMap: Record<string, PRItem> = {};
-  const targetRepFilterNum = parseInt(repFilter, 10);
+  // Rep targeting lives on the expanded PR card, so the list itself is unfiltered.
+  const targetRepFilterNum = NaN;
 
   const normalizeExerciseKey = (rawName: string): string => {
     const base = rawName
@@ -631,35 +630,7 @@ export function MetricsScreen() {
                   Favorites ({favorites.length})
                 </Text>
               </Pressable>
-
-              <Pressable
-                style={[styles.panelFilterButton, (showRepInput || repFilter !== "") && styles.panelFilterButtonActive]}
-                onPress={() => setShowRepInput(!showRepInput)}
-              >
-                <Text style={[styles.panelFilterButtonText, (showRepInput || repFilter !== "") && styles.panelFilterButtonTextActive]}>
-                   {repFilter !== "" ? `Reps: ${repFilter}` : "Enter Rep Number"}
-                </Text>
-              </Pressable>
             </View>
-
-            {showRepInput && (
-              <View style={styles.repInputWrapper}>
-                <NumericInput
-                  style={styles.repTextInput}
-                  placeholder="Enter specific target rep count..."
-                  placeholderTextColor={theme.colors.textSecondary}
-                  value={repFilter}
-                  onChangeText={setRepFilter}
-                  maxLength={4}
-                  label="Rep count"
-                />
-                {repFilter !== "" && (
-                  <Pressable style={styles.clearRepButton} onPress={() => setRepFilter("")}>
-                    <Text style={styles.clearRepButtonText}>Clear</Text>
-                  </Pressable>
-                )}
-              </View>
-            )}
           </View>
 
           <View style={styles.filterContainer}>

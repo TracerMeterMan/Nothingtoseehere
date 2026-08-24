@@ -1,5 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Dimensions, Pressable, StyleSheet, Text, View, Easing } from 'react-native';
+import { FlameIcon } from './FlameIcon';
+
+const AnimatedFlame = Animated.createAnimatedComponent(View);
 
 interface CongratulationsAnimationProps {
   variant: 'workoutFinish' | 'prReplacement' | 'streak';
@@ -16,12 +19,15 @@ export const CongratulationsAnimation: React.FC<CongratulationsAnimationProps> =
   onAnimationFinish,
 }) => {
   const isWorkoutComplete = variant === 'workoutFinish';
+  const isStreak = variant === 'streak';
   // The card sticks around until dismissed, but the confetti clears itself.
   const [confettiVisible, setConfettiVisible] = useState(true);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.82)).current;
   const badgeGlow = useRef(new Animated.Value(0)).current;
   const barAnims = useRef(PR_BARS.map(() => new Animated.Value(0))).current;
+  const flameAnim = useRef(new Animated.Value(0)).current;
+  const flameFlicker = useRef(new Animated.Value(0)).current;
 
   // Confetti pieces
   const confettiAnims = useRef(Array.from({ length: 60 }, () => new Animated.Value(0))).current;
@@ -68,7 +74,7 @@ export const CongratulationsAnimation: React.FC<CongratulationsAnimationProps> =
     ).start();
 
     let dismissTimeout: ReturnType<typeof setTimeout> | null = null;
-    const confettiTimeout = setTimeout(() => setConfettiVisible(false), 2600);
+    const confettiTimeout = setTimeout(() => setConfettiVisible(false), 1900);
 
     if (!isWorkoutComplete) {
       Animated.stagger(
@@ -82,52 +88,46 @@ export const CongratulationsAnimation: React.FC<CongratulationsAnimationProps> =
           })
         )
       ).start();
+    }
 
-      Animated.stagger(
-        8,
-        confettiAnims.map((confettiAnim) =>
-          Animated.sequence([
-            Animated.timing(confettiAnim, {
-              toValue: 1,
-              duration: 350 + Math.random() * 250,
-              easing: Easing.out(Easing.cubic),
-              useNativeDriver: true,
-            }),
-            Animated.timing(confettiAnim, {
-              toValue: 0,
-              duration: 800 + Math.random() * 300,
-              easing: Easing.in(Easing.exp),
-              useNativeDriver: true,
-            }),
-          ])
-        )
+    if (isStreak) {
+      // The flame catches, flares up, then settles into a steady burn.
+      Animated.sequence([
+        Animated.timing(flameAnim, {
+          toValue: 1.25,
+          duration: 620,
+          easing: Easing.out(Easing.back(2)),
+          useNativeDriver: true,
+        }),
+        Animated.spring(flameAnim, { toValue: 1, friction: 4, useNativeDriver: true }),
+      ]).start();
+
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(flameFlicker, { toValue: 1, duration: 480, useNativeDriver: true }),
+          Animated.timing(flameFlicker, { toValue: 0, duration: 480, useNativeDriver: true }),
+        ])
       ).start();
     }
+
+    // Confetti always runs one way: burst outwards while fading out, never
+    // snapping back to the middle.
+    Animated.stagger(
+      8,
+      confettiAnims.map((confettiAnim) =>
+        Animated.timing(confettiAnim, {
+          toValue: 1,
+          duration: 1100 + Math.random() * 400,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        })
+      )
+    ).start();
 
     if (isWorkoutComplete) {
       dismissTimeout = setTimeout(() => {
         onAnimationFinish();
       }, 2200);
-
-      Animated.stagger(
-        10,
-        confettiAnims.map((confettiAnim) =>
-          Animated.sequence([
-            Animated.timing(confettiAnim, {
-              toValue: 1,
-              duration: 280 + Math.random() * 200,
-              easing: Easing.out(Easing.cubic),
-              useNativeDriver: true,
-            }),
-            Animated.timing(confettiAnim, {
-              toValue: 0,
-              duration: 740 + Math.random() * 260,
-              easing: Easing.in(Easing.exp),
-              useNativeDriver: true,
-            }),
-          ])
-        )
-      ).start();
     }
 
     return () => {
@@ -136,9 +136,19 @@ export const CongratulationsAnimation: React.FC<CongratulationsAnimationProps> =
         clearTimeout(dismissTimeout);
       }
     };
-  }, [fadeAnim, scaleAnim, badgeGlow, barAnims, confettiAnims, isWorkoutComplete, onAnimationFinish]);
+  }, [
+    fadeAnim,
+    scaleAnim,
+    badgeGlow,
+    barAnims,
+    confettiAnims,
+    flameAnim,
+    flameFlicker,
+    isStreak,
+    isWorkoutComplete,
+    onAnimationFinish,
+  ]);
 
-  const isStreak = variant === 'streak';
   const title = isStreak ? 'Streak Extended' : 'Personal Record';
   const glowColor = isStreak ? '#F59E0B' : '#7DD3FC';
   const confettiColors = [
@@ -168,9 +178,12 @@ export const CongratulationsAnimation: React.FC<CongratulationsAnimationProps> =
                     { translateX: anim.interpolate({ inputRange: [0, 1], outputRange: [0, offset.x] }) },
                     { translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [0, offset.y] }) },
                     { rotate: anim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', offset.rotate] }) },
-                    { scale: anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.3, 1.4, 0.8] }) },
+                    { scale: anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.3, 1.2, 0.7] }) },
                   ],
-                  opacity: anim,
+                  opacity: anim.interpolate({
+                    inputRange: [0, 0.12, 0.55, 1],
+                    outputRange: [0, 1, 1, 0],
+                  }),
                 },
               ]}
             />
@@ -195,7 +208,22 @@ export const CongratulationsAnimation: React.FC<CongratulationsAnimationProps> =
                 },
               ]}
             >
-              <Text style={styles.badgeText}>{isStreak ? '🔥' : 'PR'}</Text>
+              {isStreak ? (
+                <AnimatedFlame
+                  style={{
+                    transform: [
+                      { scale: flameAnim },
+                      {
+                        scaleY: flameFlicker.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] }),
+                      },
+                    ],
+                  }}
+                >
+                  <FlameIcon size={44} lit />
+                </AnimatedFlame>
+              ) : (
+                <Text style={styles.badgeText}>PR</Text>
+              )}
             </Animated.View>
             <View style={styles.barGraph}>
               {(isStreak ? [] : barAnims).map((barAnim, idx) => (
