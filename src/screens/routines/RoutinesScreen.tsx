@@ -12,6 +12,7 @@ import { MuscleGroupId } from "../../models/muscle";
 import { Equipment } from "../../models/exercise";
 import { EQUIPMENT_LABELS, isHoldExercise } from "../../utils/exerciseClassification";
 import { defaultRepsFor, generateRoutine } from "../../utils/routineGenerator";
+import { getTargetedMusclesSummary } from "../../components/cards/RoutineCard";
 const buildConfigGroups = (
   selectedExerciseIds: string[],
   exerciseConfigs: Record<string, ExerciseConfig>
@@ -104,34 +105,6 @@ const getRoutineInsights = (ids: string[]): string[] => {
   return recs;
 };
 // ─────────────────────────────────────────────────────────────────────────────
-
-const getTargetedMusclesSummary = (routineExercises: { exerciseId: string }[]) => {
-  if (!routineExercises || routineExercises.length === 0) return [];
-
-  const muscleCounts: Record<string, number> = {};
-
-  routineExercises.forEach((re) => {
-    const exercise = exerciseLibrary.find((e) => e.id === re.exerciseId);
-    if (!exercise || !exercise.muscles) return;
-
-    exercise.muscles.forEach((m) => {
-      muscleCounts[m.muscleId] = (muscleCounts[m.muscleId] || 0) + 1;
-    });
-  });
-
-  const entries = Object.entries(muscleCounts);
-  if (entries.length === 0) return [];
-
-  const maxVolume = Math.max(...entries.map(([_, count]) => count));
-
-  return entries.map(([muscleId, count]) => {
-    const isPrimaryTarget = count === maxVolume || count > maxVolume * 0.6;
-    return {
-      muscleId,
-      type: isPrimaryTarget ? "Primary" : "Secondary",
-    };
-  });
-};
 
 const MODALITY_FILTERS = ["barbells", "dumbbells", "calisthenics", "cables"];
 const TYPE_FILTERS = ["compound", "isolation", "skill-static", "skill-dynamic"];
@@ -857,7 +830,11 @@ export function RoutinesScreen() {
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Smart Routine Builder</Text>
 
-            <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+            <ScrollView
+              style={{ maxHeight: 420 }}
+              contentContainerStyle={styles.builderScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
               <Text style={styles.sectionLabel}>Routine name</Text>
               <TextInput
                 style={styles.input}
@@ -1004,6 +981,7 @@ export function RoutinesScreen() {
 
         <View style={styles.list}>
           {!isLoading && allRoutines.map((routine) => {
+            const targeted = getTargetedMusclesSummary(routine.exercises);
             return (
               <View key={routine.id} style={styles.cardContainer}>
                 <View style={styles.cardHeaderRow}>
@@ -1035,22 +1013,30 @@ export function RoutinesScreen() {
                   <Text style={styles.cardStats}>{routine.estimatedMinutes} mins</Text>
                 </View>
 
-                <Text style={styles.muscleSectionTitle}>Targeted Muscles:</Text>
-                <View style={styles.muscleTagContainer}>
-                  {getTargetedMusclesSummary(routine.exercises).map(({ muscleId, type }) => (
-                    <View
-                      key={muscleId}
-                      style={[
-                        styles.muscleTag,
-                        type === "Primary" ? styles.tagPrimary : styles.tagSecondary
-                      ]}
-                    >
-                      <Text style={[styles.tagText, type === "Primary" && styles.tagTextPrimary]}>
-                        {muscleId} • {type}
-                      </Text>
+                {targeted.primary.length > 0 && (
+                  <>
+                    <Text style={styles.muscleSectionTitle}>Primary in at least one exercise:</Text>
+                    <View style={styles.muscleTagContainer}>
+                      {targeted.primary.map((muscleId) => (
+                        <View key={muscleId} style={[styles.muscleTag, styles.tagPrimary]}>
+                          <Text style={[styles.tagText, styles.tagTextPrimary]}>{muscleId}</Text>
+                        </View>
+                      ))}
                     </View>
-                  ))}
-                </View>
+                  </>
+                )}
+                {targeted.secondary.length > 0 && (
+                  <>
+                    <Text style={styles.muscleSectionTitle}>Secondary in at least one exercise:</Text>
+                    <View style={styles.muscleTagContainer}>
+                      {targeted.secondary.map((muscleId) => (
+                        <View key={muscleId} style={[styles.muscleTag, styles.tagSecondary]}>
+                          <Text style={styles.tagText}>{muscleId}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </>
+                )}
               </View>
             );
           })}
@@ -1122,6 +1108,7 @@ const styles = StyleSheet.create({
   },
   stepperButtonText: { fontSize: 18, fontWeight: "700", color: theme.colors.textPrimary, lineHeight: 20 },
   stepperValue: { minWidth: 24, textAlign: "center", fontSize: 16, fontWeight: "700", color: theme.colors.textPrimary },
+  builderScrollContent: { gap: 12, paddingBottom: 4 },
   builderHint: { marginTop: 12, fontSize: 12, lineHeight: 18, color: theme.colors.textMuted },
   builderToggleRow: {
     flexDirection: "row",

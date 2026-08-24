@@ -9,33 +9,26 @@ interface RoutineCardProps {
   readiness?: { percent: number; label: string; muscles?: string; recommended?: boolean };
 }
 
-// 💡 NEW: Added helper function to calculate targeted muscles from exercise list
-const getTargetedMusclesSummary = (routineExercises: { exerciseId: string }[]) => {
-  if (!routineExercises || routineExercises.length === 0) return [];
+/**
+ * Splits the routine's muscles into the ones some exercise trains as a primary
+ * mover and the ones that only ever show up as a secondary.
+ */
+export const getTargetedMusclesSummary = (routineExercises: { exerciseId: string }[]) => {
+  const primary = new Set<string>();
+  const secondary = new Set<string>();
 
-  const muscleCounts: Record<string, number> = {};
-
-  routineExercises.forEach((re) => {
+  (routineExercises || []).forEach((re) => {
     const exercise = exerciseLibrary.find((e) => e.id === re.exerciseId);
-    if (!exercise || !exercise.muscles) return;
-
-    exercise.muscles.forEach((m) => {
-      muscleCounts[m.muscleId] = (muscleCounts[m.muscleId] || 0) + 1;
+    exercise?.muscles?.forEach((m) => {
+      if (m.load === "high") primary.add(m.muscleId);
+      else if (m.load === "medium") secondary.add(m.muscleId);
     });
   });
 
-  const entries = Object.entries(muscleCounts);
-  if (entries.length === 0) return [];
-
-  const maxVolume = Math.max(...entries.map(([_, count]) => count));
-
-  return entries.map(([muscleId, count]) => {
-    const isPrimaryTarget = count === maxVolume || count > maxVolume * 0.6;
-    return {
-      muscleId,
-      type: isPrimaryTarget ? "Primary" : "Secondary",
-    };
-  });
+  return {
+    primary: [...primary],
+    secondary: [...secondary].filter((muscleId) => !primary.has(muscleId)),
+  };
 };
 
 export function RoutineCard({ routine, readiness }: RoutineCardProps) {
@@ -56,23 +49,37 @@ export function RoutineCard({ routine, readiness }: RoutineCardProps) {
         <Text style={styles.cardStats}>{routine.estimatedMinutes} mins</Text>
       </View>
 
-      {/* 💡 NEW: Muscles Targeted Section Footer Block */}
-      <Text style={styles.muscleSectionTitle}>Targeted Muscles:</Text>
-      <View style={styles.muscleTagContainer}>
-        {getTargetedMusclesSummary(routine.exercises).map(({ muscleId, type }) => (
-          <View 
-            key={muscleId} 
-            style={[
-              styles.muscleTag, 
-              type === "Primary" ? styles.tagPrimary : styles.tagSecondary
-            ]}
-          >
-            <Text style={[styles.tagText, type === "Primary" && styles.tagTextPrimary]}>
-              {muscleId} • {type}
-            </Text>
-          </View>
-        ))}
-      </View>
+      {(() => {
+        const { primary, secondary } = getTargetedMusclesSummary(routine.exercises);
+        return (
+          <>
+            {primary.length > 0 && (
+              <>
+                <Text style={styles.muscleSectionTitle}>Primary in at least one exercise:</Text>
+                <View style={styles.muscleTagContainer}>
+                  {primary.map((muscleId) => (
+                    <View key={muscleId} style={[styles.muscleTag, styles.tagPrimary]}>
+                      <Text style={[styles.tagText, styles.tagTextPrimary]}>{muscleId}</Text>
+                    </View>
+                  ))}
+                </View>
+              </>
+            )}
+            {secondary.length > 0 && (
+              <>
+                <Text style={styles.muscleSectionTitle}>Secondary in at least one exercise:</Text>
+                <View style={styles.muscleTagContainer}>
+                  {secondary.map((muscleId) => (
+                    <View key={muscleId} style={[styles.muscleTag, styles.tagSecondary]}>
+                      <Text style={styles.tagText}>{muscleId}</Text>
+                    </View>
+                  ))}
+                </View>
+              </>
+            )}
+          </>
+        );
+      })()}
       {readiness && (
         <View style={styles.readinessBlock}>
           <Text style={styles.readinessTitle}>

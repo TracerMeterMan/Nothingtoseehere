@@ -3,6 +3,8 @@ export const STREAK_STATE_KEY = "@split_streak_state";
 export type StreakState = {
   streak: number;
   lastCreditedDate: string | null;
+  /** True when today's credit was handed out for a rest day. */
+  creditedRestDay: boolean;
   deloadActive: boolean;
   deloadSince: string | null;
 };
@@ -10,6 +12,7 @@ export type StreakState = {
 export const emptyStreakState: StreakState = {
   streak: 0,
   lastCreditedDate: null,
+  creditedRestDay: false,
   deloadActive: false,
   deloadSince: null,
 };
@@ -34,11 +37,17 @@ export const resolveStreak = (state: StreakState, today: Date = new Date()): Str
 };
 
 /** Credits one day of split adherence. No-op while deloading or already credited. */
-export const creditStreakDay = (state: StreakState, today: Date = new Date()): StreakState => {
+export const creditStreakDay = (
+  state: StreakState,
+  today: Date = new Date(),
+  restDay = false
+): StreakState => {
   if (state.deloadActive) return state;
 
   const todayKey = dateKey(today);
-  if (state.lastCreditedDate === todayKey) return state;
+  if (state.lastCreditedDate === todayKey) {
+    return state.creditedRestDay === restDay ? state : { ...state, creditedRestDay: restDay };
+  }
 
   const continues = state.lastCreditedDate === previousDayKey(today);
 
@@ -46,6 +55,24 @@ export const creditStreakDay = (state: StreakState, today: Date = new Date()): S
     ...state,
     streak: continues ? state.streak + 1 : 1,
     lastCreditedDate: todayKey,
+    creditedRestDay: restDay,
+  };
+};
+
+/**
+ * Takes today's credit back. Used when a day that was credited as a rest day
+ * gets work scheduled onto it: the streak drops until that work is finished.
+ */
+export const revokeRestDayCredit = (state: StreakState, today: Date = new Date()): StreakState => {
+  const todayKey = dateKey(today);
+  if (state.deloadActive) return state;
+  if (state.lastCreditedDate !== todayKey || !state.creditedRestDay) return state;
+
+  return {
+    ...state,
+    streak: Math.max(0, state.streak - 1),
+    lastCreditedDate: state.streak > 1 ? previousDayKey(today) : null,
+    creditedRestDay: false,
   };
 };
 

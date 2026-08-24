@@ -33,13 +33,16 @@ import { calculateRecovery } from "../utils/recovery";
 import { isHoldExercise } from "../utils/exerciseClassification";
 import {
   creditStreakDay,
+  dateKey,
   emptyStreakState,
   endDeload,
   resolveStreak,
+  revokeRestDayCredit,
   startDeload,
   StreakState,
   STREAK_STATE_KEY,
 } from "../utils/streak";
+import { FlameIcon } from "@/components/ui/FlameIcon";
 
 import {
   formatSetLabel,
@@ -532,13 +535,38 @@ export function HomeScreen() {
     (todaysRoutineIds.length === 0 ||
       todaysRoutineIds.every((routineId) => completedRoutineIds.includes(routineId)));
 
+  const isRestDayToday = !!activeSplit && todaysRoutineIds.length === 0;
+
   useEffect(() => {
-    if (!followedSplitToday || streakState.deloadActive) return;
-    const credited = creditStreakDay(streakState);
+    if (streakState.deloadActive) return;
+
+    // Work scheduled onto a day already credited as rest takes that day back
+    // until the new routines are actually finished.
+    if (!followedSplitToday) {
+      const revoked = revokeRestDayCredit(streakState);
+      if (revoked !== streakState) persistStreakState(revoked);
+      return;
+    }
+
+    const credited = creditStreakDay(streakState, new Date(), isRestDayToday);
     if (credited === streakState) return;
     persistStreakState(credited);
-    enqueueCelebration("streak", `Day ${credited.streak} — today's split is done.`);
-  }, [followedSplitToday, streakState, persistStreakState, enqueueCelebration]);
+    if (credited.streak !== streakState.streak) {
+      enqueueCelebration(
+        "streak",
+        isRestDayToday
+          ? `Day ${credited.streak} — rest day claimed.`
+          : `Day ${credited.streak} — today's split is done.`
+      );
+    }
+  }, [followedSplitToday, isRestDayToday, streakState, persistStreakState, enqueueCelebration]);
+
+  // The flame only burns once today is actually earned and not frozen.
+  const streakLit =
+    followedSplitToday &&
+    !streakState.deloadActive &&
+    streakState.lastCreditedDate === dateKey() &&
+    streakState.streak > 0;
 
   const toggleDeload = () =>
     persistStreakState(streakState.deloadActive ? endDeload(streakState) : startDeload(streakState));
@@ -2091,10 +2119,21 @@ export function HomeScreen() {
 
       <Modal animationType="fade" presentationStyle="overFullScreen" transparent visible={celebrations.length > 0} onRequestClose={() => setCelebrations([])}>
         <View style={styles.celebrationContainer}>
+          {/* Card-less finish confetti overlays the screen instead of taking a
+              slot in the row, so a PR card stays centred. */}
+          {celebrations
+            .filter((item) => item.variant === 'workoutFinish')
+            .map((item) => (
+              <CongratulationsAnimation
+                key={item.id}
+                variant={item.variant}
+                message={item.message}
+                onAnimationFinish={() => removeCelebration(item.id)}
+              />
+            ))}
           <View style={styles.celebrationRow}>
             {celebrations
-              .slice()
-              .sort((a, b) => (a.variant === 'workoutFinish' ? -1 : 1))
+              .filter((item) => item.variant !== 'workoutFinish')
               .map((item) => (
                 <View key={item.id} style={styles.celebrationCardWrapper}>
                   <CongratulationsAnimation
@@ -2312,53 +2351,45 @@ export function HomeScreen() {
         {mode === "idle" && (
           <>
             <View style={styles.header}>
-              {activeSplit ? (
-                <View style={styles.inlineSplitHeaderContainer}>
-                  <Text style={styles.subtitleLeft}>Active split: {activeSplit.name}</Text>
-                  <Pressable style={styles.splitMiniActionInline} onPress={enterSplitEditor}>
-                    <Text style={styles.splitMiniActionTextInline}>Edit</Text>
-                  </Pressable>
-                  <Pressable style={styles.splitMiniActionInline} onPress={openSplitPicker}>
-                    <Text style={styles.splitMiniActionTextInline}>Switch Split</Text>
-                  </Pressable>
+              <View style={styles.headerTopRow}>
+                <View style={styles.headerTopLeft}>
+                  {activeSplit ? (
+                    <View style={styles.inlineSplitHeaderContainer}>
+                      <Text style={styles.subtitleLeft}>Active split: {activeSplit.name}</Text>
+                      <Pressable style={styles.splitMiniActionInline} onPress={enterSplitEditor}>
+                        <Text style={styles.splitMiniActionTextInline}>Edit</Text>
+                      </Pressable>
+                      <Pressable style={styles.splitMiniActionInline} onPress={openSplitPicker}>
+                        <Text style={styles.splitMiniActionTextInline}>Switch Split</Text>
+                      </Pressable>
+                    </View>
+                  ) : splitProfiles.length > 0 ? (
+                    <View style={styles.inlineSplitHeaderContainer}>
+                      <Text style={styles.subtitleLeft}>No active split selected</Text>
+                      <Pressable style={styles.splitMiniActionInline} onPress={openSplitPicker}>
+                        <Text style={styles.splitMiniActionTextInline}>Choose Split</Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
                 </View>
-              ) : splitProfiles.length > 0 ? (
-                <View style={styles.inlineSplitHeaderContainer}>
-                  <Text style={styles.subtitleLeft}>No active split selected</Text>
-                  <Pressable style={styles.splitMiniActionInline} onPress={openSplitPicker}>
-                    <Text style={styles.splitMiniActionTextInline}>Choose Split</Text>
-                  </Pressable>
-                </View>
-              ) : null}
-            </View>
 
-            {/* Streak sits in the corner: fire lights up once today's split is done */}
-            <View style={styles.streakCornerRow}>
-              <Pressable
-                style={[styles.deloadButton, streakState.deloadActive && styles.deloadButtonActive]}
-                onPress={toggleDeload}
-              >
-                <Text style={[styles.deloadButtonText, streakState.deloadActive && styles.deloadButtonTextActive]}>
-                  {streakState.deloadActive ? "End Deload" : "Deload"}
-                </Text>
-              </Pressable>
-              <View style={styles.streakCorner}>
-                <Text
-                  style={[
-                    styles.streakFlame,
-                    !(followedSplitToday && !streakState.deloadActive) && styles.streakFlameIdle,
-                  ]}
-                >
-                  🔥
-                </Text>
-                <Text
-                  style={[
-                    styles.streakValue,
-                    followedSplitToday && !streakState.deloadActive && styles.streakValueActive,
-                  ]}
-                >
-                  {streakState.streak}
-                </Text>
+                {/* Top-right corner: deload toggle and the streak flame */}
+                <View style={styles.streakCornerRow}>
+                  <Pressable
+                    style={[styles.deloadButton, streakState.deloadActive && styles.deloadButtonActive]}
+                    onPress={toggleDeload}
+                  >
+                    <Text style={[styles.deloadButtonText, streakState.deloadActive && styles.deloadButtonTextActive]}>
+                      {streakState.deloadActive ? "End Deload" : "Deload"}
+                    </Text>
+                  </Pressable>
+                  <View style={styles.streakCorner}>
+                    <FlameIcon size={22} lit={streakLit} />
+                    <Text style={[styles.streakValue, streakLit && styles.streakValueActive]}>
+                      {streakState.streak}
+                    </Text>
+                  </View>
+                </View>
               </View>
             </View>
 
@@ -2428,7 +2459,7 @@ export function HomeScreen() {
                               <Text style={styles.checkmarkBadgeText}>Completed</Text>
                             </View>
                           )}
-                          {isPartial && (
+                          {isPartial && !isCompleted && (
                             <View style={[styles.checkmarkBadge, { backgroundColor: "#f57c00" }]}>
                               <Text style={styles.checkmarkBadgeText}>Partial</Text>
                             </View>
@@ -3200,10 +3231,10 @@ const styles = StyleSheet.create({
   restDayTitle: { fontSize: 18, fontWeight: "700", color: theme.colors.textPrimary },
   restDaySubtitle: { fontSize: 14, color: theme.colors.textSecondary, textAlign: "center", marginBottom: 10 },
   
-  streakCornerRow: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 10, width: "100%" },
+  headerTopRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 10, width: "100%" },
+  headerTopLeft: { flex: 1 },
+  streakCornerRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   streakCorner: { flexDirection: "row", alignItems: "center", gap: 4 },
-  streakFlame: { fontSize: 20 },
-  streakFlameIdle: { opacity: 0.3 },
   streakValue: { fontSize: 16, fontWeight: "700", color: theme.colors.textMuted },
   streakValueActive: { color: theme.colors.warning },
   deloadButton: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceRaised },
