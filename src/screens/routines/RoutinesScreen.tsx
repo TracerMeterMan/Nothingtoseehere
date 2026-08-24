@@ -178,12 +178,16 @@ export function RoutinesScreen() {
 
   // Smart (rule-based) routine builder states
   const [isBuilderVisible, setIsBuilderVisible] = useState(false);
+  const [builderName, setBuilderName] = useState("");
   const [builderMuscles, setBuilderMuscles] = useState<MuscleGroupId[]>([]);
   const [builderEquipment, setBuilderEquipment] = useState<Equipment[]>([]);
-  const [builderSets, setBuilderSets] = useState("4");
-  const [builderPerMuscle, setBuilderPerMuscle] = useState("2");
+  const [builderVolume, setBuilderVolume] = useState<Record<string, { sets: string; exercises: string }>>({});
+  const [builderApplySets, setBuilderApplySets] = useState("3");
+  const [builderApplyExercises, setBuilderApplyExercises] = useState("2");
   const [builderWeighted, setBuilderWeighted] = useState(true);
+  const [builderCompounds, setBuilderCompounds] = useState(true);
   const [builderError, setBuilderError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Filter out the starter routines that have been hidden/deleted by the user
   const activeStarters = starterRoutines.filter((sr) => !deletedStarterIds?.includes(sr.id));
@@ -318,8 +322,21 @@ export function RoutinesScreen() {
 
   const routineInsights = getRoutineInsights(selectedExerciseIds);
 
+  /** Routine names must stay unique across custom and starter routines. */
+  const isDuplicateRoutineName = (name: string, ignoreRoutineId?: string | null) =>
+    allRoutines.some(
+      (routine) =>
+        routine.id !== ignoreRoutineId && routine.name.trim().toLowerCase() === name.trim().toLowerCase()
+    );
+
   const handleSaveRoutine = async () => {
     if (!routineName.trim() || selectedExerciseIds.length === 0) return;
+
+    if (isDuplicateRoutineName(routineName, editingRoutineId)) {
+      setSaveError("A routine with that name already exists. Pick another name.");
+      return;
+    }
+    setSaveError(null);
 
     const safeParseInt = (value: string | undefined, fallback: number): number => {
       if (!value) return fallback;
@@ -371,41 +388,90 @@ export function RoutinesScreen() {
     resetModalState();
   };
 
+  const volumeFor = (muscleId: string) =>
+    builderVolume[muscleId] || { sets: builderApplySets, exercises: builderApplyExercises };
+
+  const setVolumeFor = (muscleId: string, key: "sets" | "exercises", value: string) =>
+    setBuilderVolume((prev) => ({
+      ...prev,
+      [muscleId]: { ...volumeFor(muscleId), [key]: value },
+    }));
+
+  const applyVolumeToAll = () =>
+    setBuilderVolume(
+      Object.fromEntries(
+        builderMuscles.map((muscleId) => [
+          muscleId,
+          { sets: builderApplySets, exercises: builderApplyExercises },
+        ])
+      )
+    );
+
   const toggleBuilderMuscle = (muscleId: MuscleGroupId) =>
     setBuilderMuscles((prev) =>
       prev.includes(muscleId) ? prev.filter((item) => item !== muscleId) : [...prev, muscleId]
     );
+
+  const toggleAllMuscles = () =>
+    setBuilderMuscles((prev) => (prev.length === MUSCLE_FILTERS.length ? [] : (MUSCLE_FILTERS as MuscleGroupId[])));
 
   const toggleBuilderEquipment = (item: Equipment) =>
     setBuilderEquipment((prev) =>
       prev.includes(item) ? prev.filter((entry) => entry !== item) : [...prev, item]
     );
 
+  const toggleAllEquipment = () =>
+    setBuilderEquipment((prev) => (prev.length === EQUIPMENT_OPTIONS.length ? [] : EQUIPMENT_OPTIONS));
+
   const handleGenerateRoutine = () => {
+    if (!builderName.trim()) {
+      setBuilderError("Name the routine first.");
+      return;
+    }
+
+    if (isDuplicateRoutineName(builderName)) {
+      setBuilderError("A routine with that name already exists. Pick another name.");
+      return;
+    }
+
     if (builderMuscles.length === 0) {
       setBuilderError("Pick at least one muscle to target.");
       return;
     }
 
-    const setsPerExercise = Math.max(1, parseInt(builderSets, 10) || 4);
-    const generated = generateRoutine({
-      muscles: builderMuscles,
-      setsPerExercise,
-      exercisesPerMuscle: Math.max(1, parseInt(builderPerMuscle, 10) || 2),
+    const result = generateRoutine({
+      muscles: builderMuscles.map((muscleId) => ({
+        muscleId,
+        exercises: Math.max(1, parseInt(volumeFor(muscleId).exercises, 10) || 2),
+        setsPerExercise: Math.max(1, parseInt(volumeFor(muscleId).sets, 10) || 3),
+      })),
       equipment: builderEquipment,
       allowWeighted: builderWeighted,
+      allowCompounds: builderCompounds,
     });
 
-    if (generated.length === 0) {
-      setBuilderError("No exercises match those constraints. Add equipment or allow weighted work.");
+    if (result.exercises.length === 0) {
+      setBuilderError(
+        "Nothing matches those constraints. Add equipment, allow weighted work or compounds — or build the routine yourself."
+      );
+      return;
+    }
+
+    if (result.shortfalls.length > 0) {
+      const detail = result.shortfalls
+        .map((entry) => `${entry.muscleId} (${entry.available}/${entry.requested})`)
+        .join(", ");
+      setBuilderError(
+        `Not enough matching exercises for ${detail}. Add equipment, allow compounds or lower the exercises per muscle — or create the routine yourself.`
+      );
       return;
     }
 
     const configs: Record<string, ExerciseConfig> = {};
-    generated.forEach((exercise) => {
+    result.exercises.forEach(({ exercise, sets }) => {
       const isHold = exercise.type === "skill-static" || checkIsHold(exercise.id);
       configs[exercise.id] = {
-        sets: String(setsPerExercise),
+        sets: String(sets),
         reps: isHold ? "" : defaultRepsFor(exercise),
         hold: isHold ? "30" : "",
         specialType: "normal",
@@ -415,13 +481,14 @@ export function RoutinesScreen() {
     });
 
     setBuilderError(null);
+    setSaveError(null);
     setIsBuilderVisible(false);
     setEditingRoutineId(null);
-    setRoutineName(`${builderMuscles.slice(0, 2).join(" & ")} Session`);
+    setRoutineName(builderName.trim());
     setRoutineDescription(
       `${builderWeighted ? "Weighted" : "Bodyweight"} routine targeting ${builderMuscles.join(", ")}.`
     );
-    setSelectedExerciseIds(generated.map((exercise) => exercise.id));
+    setSelectedExerciseIds(result.exercises.map((entry) => entry.exercise.id));
     setExerciseConfigs(configs);
     setCreationStep(2);
     setIsModalVisible(true);
@@ -493,8 +560,13 @@ export function RoutinesScreen() {
                   placeholder="Routine Name (e.g., Upper Body Focus)"
                   placeholderTextColor={theme.colors.textSecondary}
                   value={routineName}
-                  onChangeText={setRoutineName}
+                  onChangeText={(value) => {
+                    setRoutineName(value);
+                    setSaveError(null);
+                  }}
                 />
+
+                {saveError && <Text style={styles.builderError}>{saveError}</Text>}
 
                 <TextInput
                   style={styles.input}
@@ -806,7 +878,23 @@ export function RoutinesScreen() {
             <Text style={styles.modalTitle}>Smart Routine Builder</Text>
 
             <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
-              <Text style={styles.sectionLabel}>Muscles targeted</Text>
+              <Text style={styles.sectionLabel}>Routine name</Text>
+              <TextInput
+                style={styles.input}
+                value={builderName}
+                onChangeText={setBuilderName}
+                placeholder="e.g. Pull Focus A"
+                placeholderTextColor={theme.colors.textMuted}
+              />
+
+              <View style={styles.builderSectionHeader}>
+                <Text style={styles.sectionLabel}>Muscles targeted</Text>
+                <Pressable style={styles.builderMiniButton} onPress={toggleAllMuscles}>
+                  <Text style={styles.builderMiniButtonText}>
+                    {builderMuscles.length === MUSCLE_FILTERS.length ? "Deselect all" : "Select all"}
+                  </Text>
+                </Pressable>
+              </View>
               <View style={styles.filterRow}>
                 {MUSCLE_FILTERS.map((muscle) => {
                   const isActive = builderMuscles.includes(muscle as MuscleGroupId);
@@ -822,7 +910,14 @@ export function RoutinesScreen() {
                 })}
               </View>
 
-              <Text style={styles.sectionLabel}>Equipment available</Text>
+              <View style={styles.builderSectionHeader}>
+                <Text style={styles.sectionLabel}>Equipment available</Text>
+                <Pressable style={styles.builderMiniButton} onPress={toggleAllEquipment}>
+                  <Text style={styles.builderMiniButtonText}>
+                    {builderEquipment.length === EQUIPMENT_OPTIONS.length ? "Deselect all" : "Select all"}
+                  </Text>
+                </Pressable>
+              </View>
               <View style={styles.filterRow}>
                 {EQUIPMENT_OPTIONS.map((item) => {
                   const isActive = builderEquipment.includes(item);
@@ -844,25 +939,58 @@ export function RoutinesScreen() {
               <View style={styles.builderRow}>
                 <NumericInput
                   style={[styles.smallInput, { width: 70 }]}
-                  value={builderSets}
-                  onChangeText={setBuilderSets}
+                  value={builderApplySets}
+                  onChangeText={setBuilderApplySets}
                   maxLength={2}
                   label="Sets per exercise"
                 />
                 <NumericInput
                   style={[styles.smallInput, { width: 70 }]}
-                  value={builderPerMuscle}
-                  onChangeText={setBuilderPerMuscle}
+                  value={builderApplyExercises}
+                  onChangeText={setBuilderApplyExercises}
                   maxLength={2}
                   label="Exercises per muscle"
                 />
+                <Pressable style={styles.builderMiniButton} onPress={applyVolumeToAll}>
+                  <Text style={styles.builderMiniButtonText}>Apply to all</Text>
+                </Pressable>
               </View>
+
+              {builderMuscles.map((muscleId) => (
+                <View key={muscleId} style={styles.builderRow}>
+                  <Text style={[styles.inputLabel, { flex: 1 }]}>{muscleId}</Text>
+                  <NumericInput
+                    style={[styles.smallInput, { width: 60 }]}
+                    value={volumeFor(muscleId).sets}
+                    onChangeText={(value) => setVolumeFor(muscleId, "sets", value)}
+                    maxLength={2}
+                    label="Sets"
+                  />
+                  <NumericInput
+                    style={[styles.smallInput, { width: 60 }]}
+                    value={volumeFor(muscleId).exercises}
+                    onChangeText={(value) => setVolumeFor(muscleId, "exercises", value)}
+                    maxLength={2}
+                    label="Exercises"
+                  />
+                </View>
+              ))}
 
               <View style={styles.builderToggleRow}>
                 <Text style={styles.inputLabel}>Allow weighted exercises</Text>
                 <Switch
                   value={builderWeighted}
                   onValueChange={setBuilderWeighted}
+                  trackColor={{ false: theme.colors.border, true: theme.colors.accent }}
+                  thumbColor={theme.colors.textPrimary}
+                />
+              </View>
+
+              <View style={styles.builderToggleRow}>
+                <Text style={styles.inputLabel}>Include compounds</Text>
+                <Switch
+                  value={builderCompounds}
+                  onValueChange={setBuilderCompounds}
                   trackColor={{ false: theme.colors.border, true: theme.colors.accent }}
                   thumbColor={theme.colors.textPrimary}
                 />
@@ -882,10 +1010,10 @@ export function RoutinesScreen() {
                 style={[
                   styles.modalButton,
                   styles.modalConfirmButton,
-                  builderMuscles.length === 0 && styles.disabledButton,
+                  (builderMuscles.length === 0 || !builderName.trim()) && styles.disabledButton,
                 ]}
                 onPress={handleGenerateRoutine}
-                disabled={builderMuscles.length === 0}
+                disabled={builderMuscles.length === 0 || !builderName.trim()}
               >
                 <Text style={styles.modalConfirmText}>Generate</Text>
               </Pressable>
@@ -904,6 +1032,8 @@ export function RoutinesScreen() {
           style={styles.createButton}
           onPress={() => {
             setBuilderError(null);
+            setBuilderName("");
+            setBuilderVolume({});
             setIsBuilderVisible(true);
           }}
         >
@@ -990,6 +1120,21 @@ const styles = StyleSheet.create({
   },
   createButtonText: { color: theme.colors.accent, fontWeight: "600", fontSize: 15 },
   builderRow: { flexDirection: "row", gap: 16, alignItems: "flex-end", marginTop: 4 },
+  builderSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 12,
+  },
+  builderMiniButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceRaised,
+  },
+  builderMiniButtonText: { fontSize: 12, fontWeight: "600", color: theme.colors.textSecondary },
   builderToggleRow: {
     flexDirection: "row",
     alignItems: "center",

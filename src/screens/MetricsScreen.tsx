@@ -9,7 +9,7 @@ import { exerciseLibrary } from "../data/exerciseLibrary";
 import { muscleGroups } from "../data/muscleGroups";
 import { theme } from "../theme/theme";
 import { Button } from "../components/ui/Button";
-import { computeRoutineOverload, describeOverload } from "../utils/overload";
+import { computeRoutineStrength, describeRoutineStrength } from "../utils/overload";
 
 const WORKOUT_HISTORY_KEY = "@workout_history";
 const FAVORITE_EXERCISES_KEY = "@favorite_exercises";
@@ -500,24 +500,24 @@ export function MetricsScreen() {
       calculatedPoints.slice(1).map(p => `L ${p.x} ${p.y}`).join(" ");
   }
 
-  // Routines that actually have logged sessions can be charted for overload.
+  // Routines that actually have logged sessions can be charted for strength progress.
   const overloadRoutineNames = Array.from(
     new Set(history.map((session) => session.routineName).filter(Boolean))
   ) as string[];
   const activeOverloadRoutine = selectedOverloadRoutine || overloadRoutineNames[0] || null;
   const overloadPoints = activeOverloadRoutine
-    ? computeRoutineOverload(history, null, activeOverloadRoutine).slice(-8)
+    ? computeRoutineStrength(history, null, activeOverloadRoutine).slice(-8)
     : [];
-  const overloadSummary = describeOverload(overloadPoints);
+  const strengthSummary = describeRoutineStrength(overloadPoints);
 
-  const overloadValues = overloadPoints.map((point) => point.index);
-  const overloadMin = overloadValues.length ? Math.min(...overloadValues, 100) - 5 : 95;
-  const overloadMax = overloadValues.length ? Math.max(...overloadValues, 100) + 5 : 105;
+  const overloadValues = overloadPoints.map((point) => point.percentVsFirst);
+  const overloadMin = overloadValues.length ? Math.min(...overloadValues, 0) - 5 : -5;
+  const overloadMax = overloadValues.length ? Math.max(...overloadValues, 0) + 5 : 5;
   const overloadRange = overloadMax - overloadMin === 0 ? 1 : overloadMax - overloadMin;
   const overloadSpacing = overloadPoints.length > 1 ? usableWidth / (overloadPoints.length - 1) : usableWidth;
   const overloadPointCoords = overloadPoints.map((point, index) => ({
     x: sidePadding + index * overloadSpacing,
-    y: graphHeight - ((point.index - overloadMin) / overloadRange) * graphHeight,
+    y: graphHeight - ((point.percentVsFirst - overloadMin) / overloadRange) * graphHeight,
     point,
   }));
   const overloadPath = overloadPointCoords.length
@@ -755,14 +755,15 @@ export function MetricsScreen() {
           )}
         </View>
 
-        {/* ROUTINE PROGRESSIVE OVERLOAD */}
+        {/* ROUTINE STRENGTH PROGRESS */}
         <View style={styles.sectionContainer}>
-          <Text style={styles.sectionTitle}>Routine Progressive Overload</Text>
+          <Text style={styles.sectionTitle}>Routine Strength Progress</Text>
 
           <View style={styles.infoBanner}>
             <Text style={styles.infoBannerText}>
-              Averages every exercise in the routine against its first logged session. Extra reps, heavier loads and
-              longer holds all count as overload — 100 is your starting point.
+              Dynamic exercises are tracked by estimated 1RM (the same formula as your PRs). Static holds use hold
+              equivalent — hold time scaled by any added weight, so 20s with +14kg counts as ~24s bodyweight. The line
+              is the average change of every exercise in the routine versus your first session.
             </Text>
           </View>
 
@@ -785,10 +786,13 @@ export function MetricsScreen() {
                 })}
               </ScrollView>
 
-              <Text style={styles.overloadHeadline}>
-                {overloadPoints.length ? `${overloadPoints[overloadPoints.length - 1].index} overload index` : "No data"}
-              </Text>
-              <Text style={styles.overloadSummary}>{overloadSummary}</Text>
+              <Text style={styles.overloadHeadline}>{strengthSummary.vsFirst}</Text>
+              {!!strengthSummary.vsLast && <Text style={styles.overloadSummary}>{strengthSummary.vsLast}</Text>}
+              {strengthSummary.movers.map((mover) => (
+                <Text key={mover} style={styles.overloadSummary}>
+                  {mover}
+                </Text>
+              ))}
 
               {overloadPoints.length > 1 && (
                 <>
