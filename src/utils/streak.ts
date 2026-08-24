@@ -2,7 +2,6 @@ export const STREAK_STATE_KEY = "@split_streak_state";
 
 export type StreakState = {
   streak: number;
-  bestStreak: number;
   lastCreditedDate: string | null;
   deloadActive: boolean;
   deloadSince: string | null;
@@ -10,7 +9,6 @@ export type StreakState = {
 
 export const emptyStreakState: StreakState = {
   streak: 0,
-  bestStreak: 0,
   lastCreditedDate: null,
   deloadActive: false,
   deloadSince: null,
@@ -30,7 +28,7 @@ const previousDayKey = (date: Date = new Date()) => {
  */
 export const resolveStreak = (state: StreakState, today: Date = new Date()): StreakState => {
   if (state.deloadActive) return state;
-  if (!state.lastCreditedDate) return { ...state, streak: 0 };
+  if (!state.lastCreditedDate) return state.streak === 0 ? state : { ...state, streak: 0 };
   if (state.lastCreditedDate === dateKey(today) || state.lastCreditedDate === previousDayKey(today)) return state;
   return { ...state, streak: 0 };
 };
@@ -43,12 +41,10 @@ export const creditStreakDay = (state: StreakState, today: Date = new Date()): S
   if (state.lastCreditedDate === todayKey) return state;
 
   const continues = state.lastCreditedDate === previousDayKey(today);
-  const streak = continues ? state.streak + 1 : 1;
 
   return {
     ...state,
-    streak,
-    bestStreak: Math.max(state.bestStreak, streak),
+    streak: continues ? state.streak + 1 : 1,
     lastCreditedDate: todayKey,
   };
 };
@@ -59,10 +55,21 @@ export const startDeload = (state: StreakState, today: Date = new Date()): Strea
   deloadSince: dateKey(today),
 });
 
-/** Ending a deload resumes counting from the frozen streak value. */
-export const endDeload = (state: StreakState, today: Date = new Date()): StreakState => ({
-  ...state,
-  deloadActive: false,
-  deloadSince: null,
-  lastCreditedDate: state.streak > 0 ? previousDayKey(today) : state.lastCreditedDate,
-});
+/**
+ * Ending a deload resumes counting from the frozen streak value: the days spent
+ * deloading are forgiven, but a day already credited stays credited so that
+ * toggling deload on and off can never hand out an extra day.
+ */
+export const endDeload = (state: StreakState, today: Date = new Date()): StreakState => {
+  const todayKey = dateKey(today);
+  const alreadyCreditedRecently =
+    state.lastCreditedDate === todayKey || state.lastCreditedDate === previousDayKey(today);
+
+  return {
+    ...state,
+    deloadActive: false,
+    deloadSince: null,
+    lastCreditedDate:
+      state.streak > 0 && !alreadyCreditedRecently ? previousDayKey(today) : state.lastCreditedDate,
+  };
+};

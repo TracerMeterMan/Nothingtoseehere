@@ -1,14 +1,22 @@
 import { exerciseLibrary } from "../data/exerciseLibrary";
 import { isHoldExercise } from "./exerciseClassification";
 
-export type OverloadPoint = {
+/** Reference bodyweight used to convert added load on a static hold into time. */
+const HOLD_BODYWEIGHT_REFERENCE = 70;
+
+export type ExerciseStrength = {
+  key: string;
+  name: string;
+  isHold: boolean;
+  /** Estimated 1RM in kg for dynamic work, hold equivalent in seconds for statics. */
+  best: number;
+};
+
+export type StrengthPoint = {
   date: string;
-  /** Indexed against the first recorded session of the routine (100 = baseline). */
-  index: number;
-  avgLoad: number;
-  avgReps: number;
-  avgHoldSeconds: number;
-  exerciseCount: number;
+  /** Average change across the routine's exercises versus the first session. */
+  percentVsFirst: number;
+  exercises: ExerciseStrength[];
 };
 
 const normalize = (raw?: string) =>
@@ -25,37 +33,51 @@ const findExercise = (rawName?: string) => {
   return exerciseLibrary.find((entry) => normalize(entry.name) === key || normalize(entry.id) === key);
 };
 
-/**
- * Per-set overload score. Weighted work uses an Epley-style estimated 1RM so
- * that adding reps and adding weight both register as progress; static holds
- * use hold time scaled by any added load.
- */
-const setScore = (set: any) => {
-  const load = parseFloat(set?.load) || 0;
-  const reps = parseInt(set?.reps, 10) || 0;
-  if (reps <= 0) return null;
+/** Epley 1RM with the RIR/RPE correction used by the PR list. */
+export const estimateOneRepMax = (load: number, reps: number, rpe?: number, rir?: number) => {
+  if (load <= 0 || reps <= 0) return 0;
 
-  const exercise = findExercise(set?.exercise);
-  const hold = set?.isHold || isHoldExercise(exercise);
+  let effectiveReps = reps;
+  if (rir !== undefined && rir > 0) effectiveReps = reps + rir;
+  else if (rpe !== undefined && rpe >= 5 && rpe <= 10) effectiveReps = reps + (10 - rpe);
 
-  if (hold) return { key: normalize(set?.exercise), value: reps * (1 + load / 40), load, reps: 0, holdSeconds: reps };
-  if (load > 0) return { key: normalize(set?.exercise), value: load * (1 + reps / 30), load, reps, holdSeconds: 0 };
-  return { key: normalize(set?.exercise), value: reps, load: 0, reps, holdSeconds: 0 };
+  if (effectiveReps <= 1) return load;
+  return Math.round(load * (1 + effectiveReps / 30) * 10) / 10;
 };
 
-const sessionScores = (sets: any[]) => {
-  const byExercise: Record<string, { total: number; count: number; load: number; reps: number; hold: number }> = {};
+/**
+ * Static equivalent of an estimated 1RM: the bodyweight hold time that a
+ * weighted hold is worth. Carrying extra load scales the difficulty roughly with
+ * total system weight, so a 20s hold with +14kg counts as about 24s unweighted.
+ */
+export const estimateHoldEquivalent = (holdSeconds: number, load: number) => {
+  if (holdSeconds <= 0) return 0;
+  return Math.round(holdSeconds * (1 + Math.max(0, load) / HOLD_BODYWEIGHT_REFERENCE) * 10) / 10;
+};
+
+const bestPerExercise = (sets: any[]): Record<string, ExerciseStrength> => {
+  const byExercise: Record<string, ExerciseStrength> = {};
 
   (sets || []).forEach((set) => {
-    const scored = setScore(set);
-    if (!scored || !scored.key) return;
-    const bucket = byExercise[scored.key] || { total: 0, count: 0, load: 0, reps: 0, hold: 0 };
-    bucket.total += scored.value;
-    bucket.count += 1;
-    bucket.load += scored.load;
-    bucket.reps += scored.reps;
-    bucket.hold += scored.holdSeconds;
-    byExercise[scored.key] = bucket;
+    const key = normalize(set?.exercise);
+    if (!key) return;
+
+    const load = parseFloat(set?.load) || 0;
+    const reps = parseInt(set?.reps, 10) || 0;
+    if (reps <= 0) return;
+
+    const library = findExercise(set?.exercise);
+    const hold = !!set?.isHold || isHoldExercise(library);
+    const value = hold
+      ? estimateHoldEquivalent(reps, load)
+      : estimateOneRepMax(load, reps, parseFloat(set?.rpe) || undefined, parseFloat(set?.rir) || undefined) ||
+        reps;
+    if (value <= 0) return;
+
+    const existing = byExercise[key];
+    if (!existing || value > existing.best) {
+      byExercise[key] = { key, name: library?.name || String(set?.exercise || key), isHold: hold, best: value };
+    }
   });
 
   return byExercise;
@@ -73,68 +95,68 @@ export const getRoutineSessions = (history: any[], routineId?: string | null, ro
 };
 
 /**
- * Averages every exercise's per-session score against its own baseline session,
- * so the resulting index describes overload across the whole routine rather than
- * being dominated by the heaviest lift.
+ * Tracks each exercise's best estimated 1RM (or hold equivalent) per session and
+ * averages the per-exercise change against the first session, so one heavy lift
+ * cannot dominate the routine's trend.
  */
-export const computeRoutineOverload = (
+export const computeRoutineStrength = (
   history: any[],
   routineId?: string | null,
   routineName?: string | null
-): OverloadPoint[] => {
+): StrengthPoint[] => {
   const sessions = getRoutineSessions(history, routineId, routineName);
   if (sessions.length === 0) return [];
 
-  const baseline = sessionScores(sessions[0].sets);
+  const baseline = bestPerExercise(sessions[0].sets);
 
   return sessions.map((session) => {
-    const scores = sessionScores(session.sets);
-    const keys = Object.keys(scores).filter((key) => baseline[key]?.count);
+    const bests = bestPerExercise(session.sets);
+    const exercises = Object.values(bests);
 
-    const ratios = keys.map((key) => {
-      const current = scores[key].total / scores[key].count;
-      const base = baseline[key].total / baseline[key].count;
-      return base > 0 ? current / base : 1;
-    });
+    const ratios = exercises
+      .filter((exercise) => (baseline[exercise.key]?.best || 0) > 0)
+      .map((exercise) => exercise.best / baseline[exercise.key].best);
 
-    const index = ratios.length ? Math.round((ratios.reduce((sum, r) => sum + r, 0) / ratios.length) * 100) : 100;
+    const percentVsFirst = ratios.length
+      ? Math.round((ratios.reduce((sum, ratio) => sum + ratio, 0) / ratios.length - 1) * 1000) / 10
+      : 0;
 
-    const allKeys = Object.keys(scores);
-    const totalSets = allKeys.reduce((sum, key) => sum + scores[key].count, 0) || 1;
-
-    return {
-      date: session.date,
-      index,
-      avgLoad: Math.round((allKeys.reduce((sum, key) => sum + scores[key].load, 0) / totalSets) * 10) / 10,
-      avgReps: Math.round((allKeys.reduce((sum, key) => sum + scores[key].reps, 0) / totalSets) * 10) / 10,
-      avgHoldSeconds: Math.round((allKeys.reduce((sum, key) => sum + scores[key].hold, 0) / totalSets) * 10) / 10,
-      exerciseCount: allKeys.length,
-    };
+    return { date: session.date, percentVsFirst, exercises };
   });
 };
 
-export const describeOverload = (points: OverloadPoint[]) => {
-  if (points.length < 2) return "Log this routine at least twice to see overload.";
+const signed = (value: number) => `${value >= 0 ? "+" : ""}${value}%`;
+
+export const describeRoutineStrength = (points: StrengthPoint[]) => {
+  if (points.length < 2) {
+    return {
+      vsFirst: "Log this routine twice to compare sessions.",
+      vsLast: "",
+      movers: [] as string[],
+    };
+  }
 
   const latest = points[points.length - 1];
   const previous = points[points.length - 2];
-  const sinceStart = latest.index - 100;
-  const sinceLast = latest.index - previous.index;
+  const previousByKey = Object.fromEntries(previous.exercises.map((exercise) => [exercise.key, exercise.best]));
 
-  const driver =
-    latest.avgLoad > previous.avgLoad && latest.avgReps > previous.avgReps
-      ? "more weight and more reps"
-      : latest.avgLoad > previous.avgLoad
-      ? "heavier loads"
-      : latest.avgReps > previous.avgReps
-      ? "extra reps"
-      : latest.avgHoldSeconds > previous.avgHoldSeconds
-      ? "longer holds"
-      : "steady output";
+  const movers = latest.exercises
+    .filter((exercise) => (previousByKey[exercise.key] || 0) > 0)
+    .map((exercise) => ({
+      name: exercise.name,
+      isHold: exercise.isHold,
+      best: exercise.best,
+      delta: Math.round(((exercise.best / previousByKey[exercise.key] - 1) * 1000)) / 10,
+    }))
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+    .slice(0, 3)
+    .map((mover) =>
+      `${mover.name}: ${mover.best}${mover.isHold ? "s hold equiv." : " kg est. 1RM"} (${signed(mover.delta)})`
+    );
 
-  const trend = sinceLast > 0 ? "up" : sinceLast < 0 ? "down" : "flat";
-
-  return `${sinceStart >= 0 ? "+" : ""}${sinceStart}% vs first session • ${trend} ${
-    sinceLast >= 0 ? "+" : ""
-  }${sinceLast}% vs last session, driven by ${driver}.`;
+  return {
+    vsFirst: `${signed(latest.percentVsFirst)} vs first session`,
+    vsLast: `${signed(Math.round((latest.percentVsFirst - previous.percentVsFirst) * 10) / 10)} vs last session`,
+    movers,
+  };
 };

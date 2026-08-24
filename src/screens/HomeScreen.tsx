@@ -14,7 +14,7 @@ import {
   ActivityIndicator,
   Switch              // <--- Add this line
 } from "react-native";
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { CongratulationsAnimation } from "../components/ui/Celebration"; // Adjust relative path as needed
 import { RoutineCard } from "../components/cards/RoutineCard";
@@ -76,9 +76,9 @@ export function HomeScreen() {
 
   // Navigation / Modes: "idle", "selecting", "selecting_different", "active", "split_editor"
   const [mode, setMode] = useState("idle");
-  const [celebrations, setCelebrations] = useState<Array<{ id: string; variant: 'workoutFinish' | 'prReplacement'; message: string }>>([]);
+  const [celebrations, setCelebrations] = useState<Array<{ id: string; variant: 'workoutFinish' | 'prReplacement' | 'streak'; message: string }>>([]);
 
-  const enqueueCelebration = useCallback((variant: 'workoutFinish' | 'prReplacement', message: string) => {
+  const enqueueCelebration = useCallback((variant: 'workoutFinish' | 'prReplacement' | 'streak', message: string) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     setCelebrations((current) => [...current, { id, variant, message }]);
   }, []);
@@ -156,7 +156,6 @@ export function HomeScreen() {
   const [isAlertVisible, setIsAlertVisible] = useState(false);
   const [isPartialAlertVisible, setIsPartialAlertVisible] = useState(false);
   const [targetPartialRoutineId, setTargetPartialRoutineId] = useState(null);
-  const [prAlert, setPrAlert] = useState<{ title: string; body: string } | null>(null);
 
   // Subskill selection for exercises that are skills
   const [selectedSubSkill, setSelectedSubSkill] = useState(null);
@@ -531,8 +530,10 @@ export function HomeScreen() {
   useEffect(() => {
     if (!followedSplitToday || streakState.deloadActive) return;
     const credited = creditStreakDay(streakState);
-    if (credited !== streakState) persistStreakState(credited);
-  }, [followedSplitToday, streakState, persistStreakState]);
+    if (credited === streakState) return;
+    persistStreakState(credited);
+    enqueueCelebration("streak", `Day ${credited.streak} — today's split is done.`);
+  }, [followedSplitToday, streakState, persistStreakState, enqueueCelebration]);
 
   const toggleDeload = () =>
     persistStreakState(streakState.deloadActive ? endDeload(streakState) : startDeload(streakState));
@@ -806,18 +807,40 @@ export function HomeScreen() {
 
   // This must stay below getLastLoggedPerformance: hooks evaluate their dependency
   // arrays immediately, so placing it above the callback crashes HomeScreen.
+  //
+  // Auto-fill is keyed to the exact exercise (progression included). Switching to
+  // a different exercise always refills from that exercise's own last performance
+  // and clears the inputs when it has never been logged, so numbers never bleed
+  // between exercises.
+  const prefillSignatureRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (mode !== "active" || !currentExercise) return;
+    if (mode !== "active" || !currentExercise) {
+      prefillSignatureRef.current = null;
+      return;
+    }
 
-    const exerciseToMatch = selectedSubSkill?.name || exerciseName;
+    const exerciseToMatch = selectedSubSkill ? formatExerciseName(selectedSubSkill.id) : exerciseName;
+    const signature = `${activeExerciseInstanceId}|${exerciseToMatch}|${setIndex}|${dropIndex}`;
+    if (prefillSignatureRef.current === signature) return;
+    prefillSignatureRef.current = signature;
+
     const lastPerf = getLastLoggedPerformance(exerciseToMatch);
-    if (!lastPerf) return;
 
-    setLoad(lastPerf.load);
-    setReps(lastPerf.reps);
-    setRir(lastPerf.rir);
-    setRpe(lastPerf.rpe);
-  }, [activeExerciseInstanceId, setIndex, dropIndex, selectedSubSkill, mode, getLastLoggedPerformance]);
+    setLoad(lastPerf?.load || "");
+    setReps(lastPerf?.reps || "");
+    setRir(lastPerf?.rir || "");
+    setRpe(lastPerf?.rpe || "");
+  }, [
+    activeExerciseInstanceId,
+    exerciseName,
+    setIndex,
+    dropIndex,
+    selectedSubSkill,
+    mode,
+    currentExercise,
+    getLastLoggedPerformance,
+  ]);
 
   const loadRecovery = useCallback(async () => {
     try {
@@ -1345,7 +1368,7 @@ export function HomeScreen() {
 
     const prResult = computePrReplacementForSet(exerciseToLog, load, reps, isHold, setLog);
     if (prResult) {
-      setPrAlert(prResult);
+      enqueueCelebration("prReplacement", prResult.body);
     }
 
     // More drop sets on the same exercise before moving on
@@ -2042,21 +2065,6 @@ export function HomeScreen() {
          </View>
        </Modal>
 
-      {/* Simple PR confirmation popup — intentionally matches the End Workout modal style. */}
-      <Modal animationType="fade" transparent visible={!!prAlert} onRequestClose={() => setPrAlert(null)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>{prAlert?.title || "New Personal Record"}</Text>
-            <Text style={styles.modalBody}>{prAlert?.body || "You just set a new personal best."}</Text>
-            <View style={styles.modalVerticalButtons}>
-              <Button variant="primary" onPress={() => setPrAlert(null)}>
-                Continue
-              </Button>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
       <Modal animationType="fade" presentationStyle="overFullScreen" transparent visible={celebrations.length > 0} onRequestClose={() => setCelebrations([])}>
         <View style={styles.celebrationContainer}>
           <View style={styles.celebrationRow}>
@@ -2300,20 +2308,32 @@ export function HomeScreen() {
               ) : null}
             </View>
 
-            {/* Split adherence streak */}
+            {/* Split adherence streak — the fire lights up once today's split is done */}
             <View style={styles.streakBlock}>
-              <View style={styles.streakInfo}>
-                <Text style={styles.streakValue}>
-                  {streakState.streak} day{streakState.streak === 1 ? "" : "s"}
-                </Text>
-                <Text style={styles.streakLabel}>
-                  {streakState.deloadActive
-                    ? "Streak frozen — deload in progress"
-                    : followedSplitToday
-                    ? "Split followed today · best " + streakState.bestStreak
-                    : "Finish today's split to extend it · best " + streakState.bestStreak}
+              <View
+                style={[
+                  styles.streakChip,
+                  followedSplitToday && !streakState.deloadActive && styles.streakChipActive,
+                  streakState.deloadActive && styles.streakChipFrozen,
+                ]}
+              >
+                <Text style={[styles.streakFlame, !followedSplitToday && styles.streakFlameIdle]}>🔥</Text>
+                <Text
+                  style={[
+                    styles.streakValue,
+                    followedSplitToday && !streakState.deloadActive && styles.streakValueActive,
+                  ]}
+                >
+                  {streakState.streak}
                 </Text>
               </View>
+              <Text style={styles.streakLabel}>
+                {streakState.deloadActive
+                  ? "Streak frozen while deloading"
+                  : followedSplitToday
+                  ? "Split followed today"
+                  : "Finish today's split to keep it alive"}
+              </Text>
               <Pressable
                 style={[styles.deloadButton, streakState.deloadActive && styles.deloadButtonActive]}
                 onPress={toggleDeload}
@@ -3162,10 +3182,15 @@ const styles = StyleSheet.create({
   restDayTitle: { fontSize: 18, fontWeight: "700", color: theme.colors.textPrimary },
   restDaySubtitle: { fontSize: 14, color: theme.colors.textSecondary, textAlign: "center", marginBottom: 10 },
   
-  streakBlock: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12, backgroundColor: theme.colors.surface, padding: 14, borderRadius: 16, borderWidth: 1, borderColor: theme.colors.border, width: "100%" },
-  streakInfo: { flex: 1, gap: 2 },
-  streakValue: { fontSize: 18, fontWeight: "700", color: theme.colors.textPrimary },
-  streakLabel: { fontSize: 12, color: theme.colors.textSecondary },
+  streakBlock: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: theme.colors.surface, padding: 14, borderRadius: 16, borderWidth: 1, borderColor: theme.colors.border, width: "100%" },
+  streakChip: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceRaised },
+  streakChipActive: { borderColor: theme.colors.warning, backgroundColor: theme.colors.warningSoft },
+  streakChipFrozen: { borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceRaised },
+  streakFlame: { fontSize: 16 },
+  streakFlameIdle: { opacity: 0.4 },
+  streakValue: { fontSize: 16, fontWeight: "700", color: theme.colors.textSecondary },
+  streakValueActive: { color: theme.colors.warning },
+  streakLabel: { flex: 1, fontSize: 12, color: theme.colors.textSecondary },
   deloadButton: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceRaised },
   deloadButtonActive: { borderColor: theme.colors.warning, backgroundColor: theme.colors.warningSoft },
   deloadButtonText: { fontSize: 13, fontWeight: "600", color: theme.colors.textSecondary },

@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { Animated, Dimensions, Pressable, StyleSheet, Text, View, Easing } from 'react-native';
 
 interface CongratulationsAnimationProps {
-  variant: 'workoutFinish' | 'prReplacement';
+  variant: 'workoutFinish' | 'prReplacement' | 'streak';
   message?: string;
   onAnimationFinish: () => void;
 }
@@ -134,8 +134,9 @@ export const CongratulationsAnimation: React.FC<CongratulationsAnimationProps> =
     };
   }, [fadeAnim, scaleAnim, badgeGlow, barAnims, confettiAnims, isWorkoutComplete, onAnimationFinish]);
 
-  const title = 'Personal Record';
-  const glowColor = '#7DD3FC';
+  const isStreak = variant === 'streak';
+  const title = isStreak ? 'Streak Extended' : 'Personal Record';
+  const glowColor = isStreak ? '#F59E0B' : '#7DD3FC';
   const confettiColors = [
     '#F59E0B', '#F472B6', '#60A5FA', '#34D399',
     '#A78BFA', '#FB7185', '#FBBF24', '#22C55E',
@@ -190,10 +191,10 @@ export const CongratulationsAnimation: React.FC<CongratulationsAnimationProps> =
                 },
               ]}
             >
-              <Text style={styles.badgeText}>PR</Text>
+              <Text style={styles.badgeText}>{isStreak ? '🔥' : 'PR'}</Text>
             </Animated.View>
             <View style={styles.barGraph}>
-              {barAnims.map((barAnim, idx) => (
+              {(isStreak ? [] : barAnims).map((barAnim, idx) => (
                 <Animated.View
                   key={idx}
                   style={[
@@ -208,7 +209,9 @@ export const CongratulationsAnimation: React.FC<CongratulationsAnimationProps> =
             </View>
           </View>
           <Text style={styles.title}>{title}</Text>
-          <Text style={styles.message}>{message || 'Your new max has replaced an old one.'}</Text>
+          <Text style={styles.message}>
+            {message || (isStreak ? 'You followed your split today.' : 'Your new max has replaced an old one.')}
+          </Text>
         </Animated.View>
       )}
     </View>
