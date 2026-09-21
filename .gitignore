@@ -1,0 +1,9 @@
+node_modules/
+.expo/
+dist/
+build/
+*.log
+
+# Local caches created during setup in this workspace.
+work/.npm-cache/
+work/home/
